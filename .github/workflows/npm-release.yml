@@ -1,0 +1,43 @@
+name: npm Release
+
+# Publishes the js/ package to npm when a `js-v*` tag is pushed (e.g. js-v0.1.1),
+# or on manual dispatch. Version comes from js/package.json. Idempotent: skips if
+# that version is already on npm, so re-runs stay green.
+#
+# Setup once: add the repo secret NPM_TOKEN (an npm Automation or Granular token
+# with publish/2FA-bypass). See README. Provenance uses GitHub OIDC (public repo).
+
+on:
+  push:
+    tags: ["js-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Publish to npm (skip if version exists)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "freelm@$V" version >/dev/null 2>&1; then
+            echo "freelm@$V already on npm — skipping."
+          else
+            npm publish --access public --provenance
+          fi
