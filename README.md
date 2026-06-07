@@ -31,6 +31,8 @@ LLMs show up in nearly every project, and they cost money — but there's a lot 
 pip install freelm
 ```
 
+**JavaScript / TypeScript:** `npm install freelm` — same API, in [`js/`](js/). Zero runtime deps (built-in `fetch`).
+
 ## Quick start
 
 ```python

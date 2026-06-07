@@ -1,0 +1,37 @@
+{
+  "name": "freelm",
+  "version": "0.1.0",
+  "description": "Free, always-up LLM client over free-tier providers (OpenRouter, Google Gemini, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic failover, key rotation, streaming, and live model discovery. OpenAI-compatible.",
+  "keywords": [
+    "llm", "free-llm", "free llm api", "llm-gateway", "llm-router", "ai-gateway",
+    "openrouter", "gemini", "groq", "cerebras", "mistral", "nvidia-nim",
+    "openai", "openai-compatible", "failover", "fallback", "rate-limit",
+    "ai", "typescript", "free"
+  ],
+  "license": "MIT",
+  "author": "Shihab Shahriar Antor <shahriarlabs@gmail.com>",
+  "homepage": "https://github.com/shihabshahrier/freelm",
+  "repository": { "type": "git", "url": "git+https://github.com/shihabshahrier/freelm.git", "directory": "js" },
+  "bugs": { "url": "https://github.com/shihabshahrier/freelm/issues" },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "require": "./dist/index.cjs" },
+    "./compat": { "types": "./dist/compat/openai.d.ts", "import": "./dist/compat/openai.js", "require": "./dist/compat/openai.cjs" }
+  },
+  "files": ["dist"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsup": "^8",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
