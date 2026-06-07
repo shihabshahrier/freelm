@@ -1,0 +1,115 @@
+import httpx
+import pytest
+import respx
+
+from conftest import ok_payload
+
+from freelm import FreeLLM, GoogleAIStudio, NIM, NoProvidersAvailable, OpenRouter
+
+OR_URL = "https://openrouter.ai/api/v1/chat/completions"
+G_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+
+@respx.mock
+def test_success():
+    respx.post(OR_URL).mock(return_value=httpx.Response(200, json=ok_payload("hi")))
+    with FreeLLM([OpenRouter("sk-or-test")]) as llm:
+        r = llm.chat("hello")
+    assert r.text == "hi"
+    assert r.provider == "openrouter"
+    assert r.usage.total_tokens == 5
+
+
+@respx.mock
+def test_rotate_key_on_429():
+    route = respx.post(OR_URL).mock(
+        side_effect=[httpx.Response(429), httpx.Response(200, json=ok_payload("second"))]
+    )
+    with FreeLLM([OpenRouter(["key-a", "key-b"])]) as llm:
+        r = llm.chat("hello")
+    assert r.text == "second"
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_failover_across_providers():
+    respx.post(OR_URL).mock(return_value=httpx.Response(429))
+    respx.post(G_URL).mock(return_value=httpx.Response(200, json=ok_payload("from-google")))
+    with FreeLLM([OpenRouter("k1"), GoogleAIStudio("k2")], strategy="priority") as llm:
+        r = llm.chat("hello")
+    assert r.text == "from-google"
+    assert r.provider == "google"
+
+
+@respx.mock
+def test_auth_disables_key_then_exhausts():
+    respx.post(OR_URL).mock(return_value=httpx.Response(401, text="invalid key"))
+    llm = FreeLLM([OpenRouter("bad-key")])
+    with pytest.raises(NoProvidersAvailable):
+        llm.chat("hello")
+    assert llm.providers[0].keys[0].disabled is True
+    llm.close()
+
+
+@respx.mock
+def test_transient_then_recover_via_failover():
+    respx.post(OR_URL).mock(return_value=httpx.Response(503))
+    respx.post(NIM_URL).mock(return_value=httpx.Response(500))
+    respx.post(G_URL).mock(return_value=httpx.Response(200, json=ok_payload("ok")))
+    with FreeLLM([OpenRouter("k1"), NIM("nvapi-x"), GoogleAIStudio("k2")]) as llm:
+        r = llm.chat("hello")
+    assert r.provider == "google"
+    # the openrouter key took a breaker failure
+    assert llm.providers[0].keys[0].breaker.failures >= 1
+
+
+@respx.mock
+def test_bad_request_raises_immediately():
+    respx.post(OR_URL).mock(return_value=httpx.Response(400, text="invalid temperature"))
+    llm = FreeLLM([OpenRouter("k1"), GoogleAIStudio("k2")])
+    with pytest.raises(Exception) as ei:
+        llm.chat("hello")
+    # not model-related -> treated as caller bug, surfaced directly
+    assert "400" in str(ei.value)
+    llm.close()
+
+
+@respx.mock
+def test_model_scoped_429_tries_next_model_same_key():
+    # OpenRouter throttles one free model upstream; a different model should be
+    # tried on the SAME key without benching the key.
+    route = respx.post(OR_URL).mock(
+        side_effect=[
+            httpx.Response(429, text="model X is temporarily rate-limited upstream"),
+            httpx.Response(200, json=ok_payload("recovered")),
+        ]
+    )
+    llm = FreeLLM([OpenRouter("only-key")])
+    r = llm.chat("hello")
+    assert r.text == "recovered"
+    assert route.call_count == 2
+    key = llm.providers[0].keys[0]
+    assert key.cooldown_until == 0.0   # key was NOT cooled (model-scoped 429)
+    assert key.disabled is False
+    llm.close()
+
+
+@respx.mock
+def test_key_scoped_429_cools_the_key():
+    respx.post(OR_URL).mock(return_value=httpx.Response(429, text="account rate limit exceeded"))
+    llm = FreeLLM([OpenRouter("only-key")])
+    with pytest.raises(NoProvidersAvailable):
+        llm.chat("hello")
+    assert llm.providers[0].keys[0].cooldown_until > 0.0  # whole key cooled
+    llm.close()
+
+
+@respx.mock
+def test_health_report():
+    respx.post(OR_URL).mock(return_value=httpx.Response(200, json=ok_payload()))
+    with FreeLLM([OpenRouter("k1")]) as llm:
+        llm.chat("hi")
+        h = llm.health()
+    assert h[0]["provider"] == "openrouter"
+    assert h[0]["breaker"] == "closed"
