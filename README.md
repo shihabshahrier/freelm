@@ -1,6 +1,12 @@
-# freelm
+# freelm — free, always-up LLM client for Python
 
-**One always-up LLM client over free-tier providers.** Drop in your OpenRouter, Google AI Studio, and/or NVIDIA NIM keys, and `freelm` gives you a single chat call that auto-rotates keys, fails over across providers, paces itself to each tier's limits, and trips circuit breakers on dead keys — so your app keeps talking to an LLM even when one source rate-limits or dies.
+[![PyPI version](https://img.shields.io/pypi/v/freelm.svg)](https://pypi.org/project/freelm/)
+[![Python versions](https://img.shields.io/pypi/pyversions/freelm.svg)](https://pypi.org/project/freelm/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+**freelm is a free, always-up LLM client and gateway for Python** that pools multiple free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), and NVIDIA NIM** — behind one OpenAI-compatible call, with automatic API-key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
+
+📦 **PyPI:** https://pypi.org/project/freelm/ — `pip install freelm`
 
 > Python first. JS/TS and Go ports planned (the core is spec-driven for portability).
 
@@ -239,6 +245,26 @@ for row in llm.health():
 - v1.2 — persistent quota tracking (sqlite/json) + tighter tier pacing
 - v1.3 — tool / function-calling normalization
 - v2 — embeddings, vision; JS/TS and Go ports
+
+## FAQ
+
+### How do I use free LLMs in Python?
+Install `freelm`, set one or more free API keys (OpenRouter, Google AI Studio, or NVIDIA NIM) as environment variables, and call `freelm.FreeLLM.from_env().text("...")`. freelm picks an available free model and handles rate limits and failover automatically.
+
+### How do I fall back between OpenRouter, Gemini, and NVIDIA NIM?
+Pass several providers to `FreeLLM([...])`. On a rate limit (`429`), dead key (`401`), or server error, freelm rotates keys and fails over to the next provider — interleaved so every provider is reached quickly instead of stalling on one.
+
+### Is there an OpenAI-compatible free LLM client?
+Yes — `from freelm.compat import OpenAI` is a drop-in for the OpenAI SDK (`client.chat.completions.create(...)`), backed by free providers.
+
+### How do I avoid free-tier rate limits?
+freelm paces each key with a requests-per-minute token bucket plus a daily counter and skips keys predicted to be exhausted. Add more keys or providers to raise total throughput.
+
+### Which free LLM models are available right now?
+Free model IDs change constantly, so freelm discovers them live from the provider API and caches them. Run `from freelm import list_free_models; list_free_models()` for the current list.
+
+### Is freelm really free?
+freelm itself is MIT-licensed and free. It runs on providers' free tiers; the actual request limits depend on each provider's free quota.
 
 ## License
 

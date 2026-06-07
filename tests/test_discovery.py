@@ -12,8 +12,9 @@ OR_CHAT = "https://openrouter.ai/api/v1/chat/completions"
 
 MODELS_JSON = {
     "data": [
-        {"id": "vendor/big-70b:free", "context_length": 131072, "supported_parameters": ["tools", "reasoning"]},
+        {"id": "vendor/big-70b:free", "context_length": 131072, "supported_parameters": ["tools"]},
         {"id": "vendor/small-8b:free", "context_length": 8192, "supported_parameters": []},
+        {"id": "vendor/think-70b:free", "context_length": 200000, "supported_parameters": ["tools", "reasoning"]},
         {"id": "vendor/paid-70b", "context_length": 1000},  # not free -> filtered
         {
             "id": "vendor/img-only:free",
@@ -22,6 +23,9 @@ MODELS_JSON = {
         },
     ]
 }
+
+# expected order: plain large instruct first, then small, reasoning deprioritized last
+EXPECTED_ORDER = ["vendor/big-70b:free", "vendor/small-8b:free", "vendor/think-70b:free"]
 
 
 @pytest.fixture(autouse=True)
@@ -32,11 +36,12 @@ def _tmp_cache(tmp_path, monkeypatch):
 def test_to_specs_filters_and_tags():
     specs = to_specs(MODELS_JSON["data"], free_only=True)
     ids = [s.id for s in specs]
-    assert ids == ["vendor/big-70b:free", "vendor/small-8b:free"]  # large first, paid/img dropped
+    assert ids == EXPECTED_ORDER  # paid + image-only dropped; reasoning sorted last
     big = specs[0]
-    assert "large" in big.tags and "tools" in big.tags and "reasoning" in big.tags
-    small = specs[1]
+    assert "large" in big.tags and "tools" in big.tags and "reasoning" not in big.tags
+    small = next(s for s in specs if s.id == "vendor/small-8b:free")
     assert "small" in small.tags and "fast" in small.tags
+    assert "reasoning" in specs[-1].tags  # reasoning models deprioritized for `auto`
 
 
 @respx.mock
@@ -44,13 +49,13 @@ def test_discover_sync_replaces_models_and_caches():
     route = respx.get(OR_MODELS).mock(return_value=httpx.Response(200, json=MODELS_JSON))
     p = OpenRouter("k")
     assert discover_sync(p) is True
-    assert [m.id for m in p.models] == ["vendor/big-70b:free", "vendor/small-8b:free"]
+    assert [m.id for m in p.models] == EXPECTED_ORDER
 
     # second provider hits the disk cache, not the network
     p2 = OpenRouter("k")
     assert discover_sync(p2) is True
     assert route.call_count == 1
-    assert [m.id for m in p2.models] == ["vendor/big-70b:free", "vendor/small-8b:free"]
+    assert [m.id for m in p2.models] == EXPECTED_ORDER
 
 
 @respx.mock

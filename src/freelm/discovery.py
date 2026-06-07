@@ -73,8 +73,22 @@ def to_specs(api_models: List[Dict[str, Any]], *, free_only: bool) -> List[Model
         tags = list(dict.fromkeys(tags))
         specs.append(ModelSpec(mid, tuple(tags), ctx=int(ctx) or 0))
 
-    # large models first, then by context window — a sensible default failover order
-    specs.sort(key=lambda s: (0 if "large" in s.tags else 1, -s.ctx))
+    # Default order for `auto`: capable, fast, and predictable. Giant models
+    # (>150B params) are slow; reasoning models emit verbose thinking — both rank
+    # after plain instruct models. Then prefer large, then bigger context window.
+    # (Target a reasoning/giant model explicitly via model="vendor/id" when wanted.)
+    def _params_b(mid: str) -> float:
+        nums = [float(x) for x in _SIZE_RE.findall(mid.lower())]
+        return max(nums) if nums else 0.0
+
+    specs.sort(
+        key=lambda s: (
+            1 if _params_b(s.id) > 150 else 0,   # giant -> later
+            1 if "reasoning" in s.tags else 0,   # reasoning -> later
+            0 if "large" in s.tags else 1,       # prefer large
+            -s.ctx,                              # bigger context first
+        )
+    )
     return specs
 
 

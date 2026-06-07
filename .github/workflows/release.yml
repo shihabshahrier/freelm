@@ -1,17 +1,17 @@
 name: Release
 
-# Publishes to PyPI when a v* tag is pushed.
-# Uses PyPI Trusted Publishing (OIDC) — configure the publisher on PyPI first:
-#   https://docs.pypi.org/trusted-publishers/  (project: freelm, workflow: release.yml)
-# No API token/secret required once trusted publishing is set up.
+# Publishes to PyPI when a GitHub Release is published (or run manually).
+# Set the repo secret PYPI_API_TOKEN (Settings -> Secrets -> Actions).
+# `skip-existing` makes re-runs idempotent — a version already on PyPI is skipped,
+# so the job stays green instead of failing on a duplicate.
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
@@ -28,3 +28,6 @@ jobs:
           python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

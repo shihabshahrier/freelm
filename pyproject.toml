@@ -5,23 +5,33 @@ build-backend = "hatchling.build"
 [project]
 name = "freelm"
 version = "0.1.1"
-description = "One always-up LLM client over free-tier providers (OpenRouter, Google AI Studio, NVIDIA NIM) with auto key-rotation, failover, circuit breaking and quota-aware routing."
+description = "Free LLM client + gateway: one always-up, OpenAI-compatible API over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Shihab Shahriar Antor", email = "shahriarlabs@gmail.com" }]
-keywords = ["llm", "openrouter", "gemini", "nvidia-nim", "free", "failover", "router", "openai", "ai"]
+keywords = [
+    "llm", "free-llm", "free llm api", "llm-gateway", "llm-router", "ai-gateway",
+    "openrouter", "gemini", "google-ai-studio", "nvidia-nim", "groq",
+    "openai", "openai-compatible", "openai-api", "chatgpt", "claude", "gpt",
+    "failover", "fallback", "rate-limit", "circuit-breaker", "resilience",
+    "load-balancing", "model-router", "llm-api", "chatbot", "ai", "free",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = ["httpx>=0.24"]
 
