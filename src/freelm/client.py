@@ -14,7 +14,7 @@ from .errors import ConfigError, NoProvidersAvailable, ProviderError, Transient
 from .providers.base import Provider
 from .strategy import Candidate, STRATEGIES
 
-_DEFAULT_UA = "freelm/0.2.1"
+_DEFAULT_UA = "freelm/0.2.2"
 
 
 def _sse_delta(line: str) -> Optional[str]:

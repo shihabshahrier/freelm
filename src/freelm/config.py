@@ -45,9 +45,11 @@ def providers_from_env() -> List[Provider]:
     if nk:
         provs.append(NIM(nk, tier=os.getenv("FREELM_NIM_TIER", "free")))
 
-    grok = _split(_first_env("GROQ_API_KEY", "FREELM_GROQ_KEYS"))
-    if grok:
-        provs.append(Groq(grok, tier=os.getenv("FREELM_GROQ_TIER", "free")))
+    # NB: Groq (gsk_...) is the free provider here; xAI Grok (xai-...) is a
+    # different, paid service and is intentionally not supported.
+    groq_keys = _split(_first_env("GROQ_API_KEY", "FREELM_GROQ_KEYS"))
+    if groq_keys:
+        provs.append(Groq(groq_keys, tier=os.getenv("FREELM_GROQ_TIER", "free")))
 
     ck = _split(_first_env("CEREBRAS_API_KEY", "FREELM_CEREBRAS_KEYS"))
     if ck:

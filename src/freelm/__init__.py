@@ -33,7 +33,7 @@ from .errors import (
 from .providers import Cerebras, Gemini, GoogleAIStudio, Groq, Mistral, NIM, OpenRouter, Provider
 from .registry import ModelSpec
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "FreeLLM",

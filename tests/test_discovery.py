@@ -45,6 +45,17 @@ def test_to_specs_excludes_non_chat_models():
     assert ids == ["vendor/chat-70b"]  # audio/embed/tts/guard dropped
 
 
+def test_to_specs_detects_reasoning_by_name():
+    # providers whose /models lacks metadata (Groq/Cerebras) — detect by id
+    data = [
+        {"id": "vendor/gpt-oss-120b", "context_length": 8192},
+        {"id": "vendor/llama-3.3-70b", "context_length": 8192},
+    ]
+    specs = to_specs(data, free_only=False)
+    assert specs[0].id == "vendor/llama-3.3-70b"  # plain instruct leads
+    assert specs[-1].id == "vendor/gpt-oss-120b" and "reasoning" in specs[-1].tags
+
+
 def test_to_specs_filters_and_tags():
     specs = to_specs(MODELS_JSON["data"], free_only=True)
     ids = [s.id for s in specs]

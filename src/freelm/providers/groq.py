@@ -20,9 +20,9 @@ class Groq(Provider):
     # Verified exact IDs (console.groq.com/docs/models, 2026-06).
     DEFAULT_MODELS = [
         ModelSpec("llama-3.3-70b-versatile", ("chat", "large", "tools"), ctx=128000),
-        ModelSpec("openai/gpt-oss-120b", ("chat", "large", "tools"), ctx=131072),
-        ModelSpec("openai/gpt-oss-20b", ("chat", "small", "fast", "tools"), ctx=131072),
         ModelSpec("llama-3.1-8b-instant", ("chat", "small", "fast"), ctx=128000),
+        ModelSpec("openai/gpt-oss-120b", ("chat", "large", "tools", "reasoning"), ctx=131072),
+        ModelSpec("openai/gpt-oss-20b", ("chat", "small", "fast", "tools", "reasoning"), ctx=131072),
     ]
 
     def __init__(self, keys, **kw):

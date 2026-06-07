@@ -21,9 +21,9 @@ class Cerebras(Provider):
     # gpt-oss-120b confirmed via API; others are fallbacks — runtime discovery
     # replaces this list with the account's real /models.
     DEFAULT_MODELS = [
-        ModelSpec("gpt-oss-120b", ("chat", "large"), ctx=8192),
         ModelSpec("llama-3.3-70b", ("chat", "large"), ctx=8192),
         ModelSpec("qwen-3-32b", ("chat", "large"), ctx=8192),
+        ModelSpec("gpt-oss-120b", ("chat", "large", "reasoning"), ctx=8192),
     ]
 
     def __init__(self, keys, **kw):

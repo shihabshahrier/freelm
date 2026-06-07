@@ -113,6 +113,8 @@ print(r.choices[0].message.content)
 
 Multiple keys per provider: comma-separate them. See `.env.example`.
 
+> **Groq vs xAI Grok:** different companies. **Groq** (`gsk_…`) has a free tier and is supported. **xAI Grok** (`xai-…`) is paid, so it's intentionally *not* included — freelm is free-only.
+
 ## Virtual models
 
 Names differ per provider, so ask by intent and `freelm` maps to a concrete model:

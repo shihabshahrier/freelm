@@ -23,9 +23,14 @@ _SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b")
 _NON_CHAT = (
     "whisper", "tts", "text-to-speech", "speech", "audio", "transcribe",
     "embed", "embedding", "rerank", "moderation", "guard", "ocr", "-vision-encoder",
+    "imagen", "veo", "image-generation", "-generate-", "stable-diffusion", "dall-e", "aqa",
+    "orpheus", "playai", "sonic", "voice", "-stt", "-asr",
 )
 _LARGE_HINTS = ("ultra", "super", "-405", "235b", "120b", "-large", "-xl")
 _SMALL_HINTS = ("mini", "nano", "small", "lite", "tiny", "-xs", "edge")
+# reasoning models emit verbose hidden thinking — detect by name when /models
+# carries no metadata, so `auto` can deprioritize them.
+_REASONING_HINTS = ("gpt-oss", "deepseek-r1", "magistral", "qwq", "thinking", "-think", "reasoning")
 
 
 def _size_tags(model_id: str) -> List[str]:
@@ -72,7 +77,8 @@ def to_specs(api_models: List[Dict[str, Any]], *, free_only: bool) -> List[Model
         tags = ["chat"] + _size_tags(mid)
         if "tools" in params or "tool_choice" in params:
             tags.append("tools")
-        if "reasoning" in params or "include_reasoning" in params:
+        low = mid.lower()
+        if "reasoning" in params or "include_reasoning" in params or any(h in low for h in _REASONING_HINTS):
             tags.append("reasoning")
         if "image" in in_mod or "vision" in params:
             tags.append("vision")

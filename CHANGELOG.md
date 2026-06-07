@@ -3,6 +3,24 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.2.2] - 2026-06-07
+
+### Fixed
+- Discovery filters more non-chat models (image-gen + audio/TTS) that some
+  providers list without modality metadata (imagen, veo, dall-e, orpheus, ...).
+- `auto` deprioritizes reasoning models even when `/models` has no metadata, by
+  detecting them from the model id (gpt-oss, deepseek-r1, magistral, ...), so a
+  default call leads with a plain instruct model.
+
+### Notes
+- **Free-only:** this library covers free-tier providers only. **Groq** (`gsk_…`)
+  is supported; **xAI Grok** (`xai-…`) is a different, *paid* service and is
+  intentionally not included.
+- Live end-to-end tested all **six** free providers (OpenRouter, Google AI Studio,
+  NVIDIA NIM, Groq, Cerebras, Mistral): chat + streaming + live model discovery.
+
+[0.2.2]: https://github.com/shihabshahrier/freelm/releases/tag/v0.2.2
+
 ## [0.2.1] - 2026-06-07
 
 ### Fixed

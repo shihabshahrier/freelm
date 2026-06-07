@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freelm"
-version = "0.2.1"
+version = "0.2.2"
 description = "Free LLM client + gateway: one always-up, OpenAI-compatible API (with streaming) over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
 readme = "README.md"
 requires-python = ">=3.9"
