@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freelm"
-version = "0.1.1"
-description = "Free LLM client + gateway: one always-up, OpenAI-compatible API over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
+version = "0.2.0"
+description = "Free LLM client + gateway: one always-up, OpenAI-compatible API (with streaming) over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Shihab Shahriar Antor", email = "shahriarlabs@gmail.com" }]
 keywords = [
     "llm", "free-llm", "free llm api", "llm-gateway", "llm-router", "ai-gateway",
-    "openrouter", "gemini", "google-ai-studio", "nvidia-nim", "groq",
+    "openrouter", "gemini", "google-ai-studio", "nvidia-nim", "groq", "cerebras", "mistral",
     "openai", "openai-compatible", "openai-api", "chatgpt", "claude", "gpt",
     "failover", "fallback", "rate-limit", "circuit-breaker", "resilience",
     "load-balancing", "model-router", "llm-api", "chatbot", "ai", "free",

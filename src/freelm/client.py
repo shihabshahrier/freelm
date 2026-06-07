@@ -1,8 +1,9 @@
 """The user-facing clients: ``FreeLLM`` (sync) and ``AsyncFreeLLM`` (async)."""
 from __future__ import annotations
 
+import json
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence
 
 import httpx
 
@@ -13,7 +14,21 @@ from .errors import ConfigError, NoProvidersAvailable, ProviderError, Transient
 from .providers.base import Provider
 from .strategy import Candidate, STRATEGIES
 
-_DEFAULT_UA = "freelm/0.1.1"
+_DEFAULT_UA = "freelm/0.2.0"
+
+
+def _sse_delta(line: str) -> Optional[str]:
+    """Extract the content delta from one OpenAI-style SSE line, or None."""
+    if not line or not line.startswith("data:"):
+        return None
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        obj = json.loads(data)
+        return obj["choices"][0]["delta"].get("content") or None
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
 
 
 class _BaseClient:
@@ -135,6 +150,72 @@ class FreeLLM(_BaseClient):
     def text(self, messages: Any, model: str = "auto", **kw: Any) -> str:
         return self.chat(messages, model=model, **kw).text
 
+    def stream(self, messages: Any, model: str = "auto", **kw: Any) -> Iterator[str]:
+        """Yield content deltas as they arrive. Fails over between providers
+        *before* the first token; once tokens start flowing it stays on that
+        provider (no mid-stream failover)."""
+        self._ensure_discovered()
+        req = build_request(messages, model, kw)
+        deadline = time.monotonic() + self.timeout if self.timeout else None
+        attempts: List = []
+        tried: set = set()
+
+        while len(attempts) < self.max_attempts:
+            now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                break
+            cand = engine.select_candidate(self.providers, self.strategy, self._rr, req.model, tried, now)
+            if cand is None:
+                w = engine.soonest_wait(self.providers, now)
+                if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    time.sleep(min(w, self.max_wait) + 0.01)
+                    tried = engine.forget_recovered(self.providers, tried, time.monotonic())
+                    continue
+                break
+
+            tried.add((cand.provider.name, cand.key.key, cand.model))
+            if not cand.key.reserve(now):
+                continue
+
+            produced = False
+            try:
+                for chunk in self._stream_do(cand, req):
+                    produced = True
+                    yield chunk
+            except ProviderError as exc:
+                engine.apply_error(cand, exc, time.monotonic())
+                attempts.append((cand, exc))
+                if produced or engine.should_raise(exc):
+                    raise
+                continue
+            engine.apply_success(cand, 0.0)
+            return
+
+        raise NoProvidersAvailable(attempts)
+
+    def _stream_do(self, cand: Candidate, req) -> Iterator[str]:
+        p = cand.provider
+        body = req.payload(cand.model)
+        body["stream"] = True
+        try:
+            with self._client.stream("POST", p.url, headers=p.headers(cand.key.key), json=body) as r:
+                if r.status_code != 200:
+                    r.read()
+                    from .errors import RateLimited, classify
+
+                    err = classify(r.status_code, dict(r.headers), r.text, p.name)
+                    if isinstance(err, RateLimited):
+                        err.scope = p.rate_limit_scope(r.text)
+                    raise err
+                for line in r.iter_lines():
+                    delta = _sse_delta(line)
+                    if delta:
+                        yield delta
+        except httpx.TimeoutException as e:
+            raise Transient(p.name, 0, f"timeout: {e}")
+        except httpx.TransportError as e:
+            raise Transient(p.name, 0, f"transport: {e}")
+
     def _do(self, cand: Candidate, req) -> ChatResponse:
         p = cand.provider
         body = req.payload(cand.model)
@@ -244,6 +325,73 @@ class AsyncFreeLLM(_BaseClient):
 
     async def text(self, messages: Any, model: str = "auto", **kw: Any) -> str:
         return (await self.chat(messages, model=model, **kw)).text
+
+    async def astream(self, messages: Any, model: str = "auto", **kw: Any) -> AsyncIterator[str]:
+        """Async content-delta stream. Fails over before the first token only."""
+        import asyncio
+
+        await self._ensure_discovered()
+        req = build_request(messages, model, kw)
+        deadline = time.monotonic() + self.timeout if self.timeout else None
+        attempts: List = []
+        tried: set = set()
+
+        while len(attempts) < self.max_attempts:
+            now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                break
+            cand = engine.select_candidate(self.providers, self.strategy, self._rr, req.model, tried, now)
+            if cand is None:
+                w = engine.soonest_wait(self.providers, now)
+                if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    await asyncio.sleep(min(w, self.max_wait) + 0.01)
+                    tried = engine.forget_recovered(self.providers, tried, time.monotonic())
+                    continue
+                break
+
+            tried.add((cand.provider.name, cand.key.key, cand.model))
+            if not cand.key.reserve(now):
+                continue
+
+            produced = False
+            try:
+                async for chunk in self._astream_do(cand, req):
+                    produced = True
+                    yield chunk
+            except ProviderError as exc:
+                engine.apply_error(cand, exc, time.monotonic())
+                attempts.append((cand, exc))
+                if produced or engine.should_raise(exc):
+                    raise
+                continue
+            engine.apply_success(cand, 0.0)
+            return
+
+        raise NoProvidersAvailable(attempts)
+
+    async def _astream_do(self, cand: Candidate, req) -> AsyncIterator[str]:
+        p = cand.provider
+        client = self._ensure_client()
+        body = req.payload(cand.model)
+        body["stream"] = True
+        try:
+            async with client.stream("POST", p.url, headers=p.headers(cand.key.key), json=body) as r:
+                if r.status_code != 200:
+                    await r.aread()
+                    from .errors import RateLimited, classify
+
+                    err = classify(r.status_code, dict(r.headers), r.text, p.name)
+                    if isinstance(err, RateLimited):
+                        err.scope = p.rate_limit_scope(r.text)
+                    raise err
+                async for line in r.aiter_lines():
+                    delta = _sse_delta(line)
+                    if delta:
+                        yield delta
+        except httpx.TimeoutException as e:
+            raise Transient(p.name, 0, f"timeout: {e}")
+        except httpx.TransportError as e:
+            raise Transient(p.name, 0, f"transport: {e}")
 
     async def _ado(self, cand: Candidate, req) -> ChatResponse:
         p = cand.provider

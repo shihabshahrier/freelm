@@ -12,7 +12,7 @@ import os
 from typing import List, Optional
 
 from .errors import ConfigError
-from .providers import GoogleAIStudio, NIM, OpenRouter
+from .providers import Cerebras, GoogleAIStudio, Groq, Mistral, NIM, OpenRouter
 from .providers.base import Provider
 
 
@@ -45,9 +45,22 @@ def providers_from_env() -> List[Provider]:
     if nk:
         provs.append(NIM(nk, tier=os.getenv("FREELM_NIM_TIER", "free")))
 
+    grok = _split(_first_env("GROQ_API_KEY", "FREELM_GROQ_KEYS"))
+    if grok:
+        provs.append(Groq(grok, tier=os.getenv("FREELM_GROQ_TIER", "free")))
+
+    ck = _split(_first_env("CEREBRAS_API_KEY", "FREELM_CEREBRAS_KEYS"))
+    if ck:
+        provs.append(Cerebras(ck, tier=os.getenv("FREELM_CEREBRAS_TIER", "free")))
+
+    mk = _split(_first_env("MISTRAL_API_KEY", "FREELM_MISTRAL_KEYS"))
+    if mk:
+        provs.append(Mistral(mk, tier=os.getenv("FREELM_MISTRAL_TIER", "free")))
+
     if not provs:
         raise ConfigError(
             "no provider keys found in environment. Set at least one of "
-            "OPENROUTER_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY."
+            "OPENROUTER_API_KEY, GEMINI_API_KEY, NVIDIA_API_KEY, GROQ_API_KEY, "
+            "CEREBRAS_API_KEY, or MISTRAL_API_KEY."
         )
     return provs

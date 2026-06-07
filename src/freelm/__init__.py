@@ -30,10 +30,10 @@ from .errors import (
     RateLimited,
     Transient,
 )
-from .providers import Gemini, GoogleAIStudio, NIM, OpenRouter, Provider
+from .providers import Cerebras, Gemini, GoogleAIStudio, Groq, Mistral, NIM, OpenRouter, Provider
 from .registry import ModelSpec
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "FreeLLM",
@@ -43,6 +43,9 @@ __all__ = [
     "GoogleAIStudio",
     "Gemini",
     "NIM",
+    "Groq",
+    "Cerebras",
+    "Mistral",
     "ModelSpec",
     "Message",
     "ChatRequest",

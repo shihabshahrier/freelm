@@ -4,7 +4,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/freelm.svg)](https://pypi.org/project/freelm/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**freelm is a free, always-up LLM client and gateway for Python** that pools multiple free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), and NVIDIA NIM** — behind one OpenAI-compatible call, with automatic API-key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
+**freelm is a free, always-up LLM client and gateway for Python** that pools multiple free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), NVIDIA NIM, Groq, Cerebras, and Mistral** — behind one OpenAI-compatible call (with streaming), with automatic API-key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
 
 📦 **PyPI:** https://pypi.org/project/freelm/ — `pip install freelm`
 
@@ -17,8 +17,13 @@ LLMs show up in nearly every project, and they cost money — but there's a lot 
 - **OpenRouter** — free models (`:free`), ~50 req/day under $10 credit, ~1000/day at ≥$10.
 - **Google AI Studio (Gemini)** — generous free tier; Tier 1 (billing on) lifts limits hard.
 - **NVIDIA NIM** (`build.nvidia.com`) — many models free against build credits.
+- **Groq** — 30 RPM / 14,400 req-day free, very fast inference, no card.
+- **Cerebras** — ~30 RPM, **1M tokens/day** free (8K context cap), no card.
+- **Mistral** — free "Experiment" tier: 2 RPM, 500K TPM, 1B tokens/month.
 
 `freelm` pools them behind one fault-tolerant client.
+
+> Free-tier numbers above were verified 2026-06 and change often — they're defaults you can override with `tier` / `rpm` / `rpd`.
 
 ## Install
 
@@ -65,6 +70,22 @@ async with AsyncFreeLLM.from_env() as llm:
     print(await llm.text("hi"))
 ```
 
+## Streaming
+
+Token streaming works across every provider and through the same failover. It fails over between providers **before the first token**; once tokens start flowing it stays on that provider (no mid-stream switching).
+
+```python
+llm = freelm.FreeLLM.from_env()
+for chunk in llm.stream("Write a haiku about failover."):
+    print(chunk, end="", flush=True)
+```
+
+```python
+async with freelm.AsyncFreeLLM.from_env() as llm:
+    async for chunk in llm.astream("Stream me some tokens"):
+        print(chunk, end="", flush=True)
+```
+
 ## Drop-in OpenAI shim
 
 ```python
@@ -86,8 +107,11 @@ print(r.choices[0].message.content)
 | OpenRouter | `OPENROUTER_API_KEY` / `FREELM_OPENROUTER_KEYS` | `FREELM_OPENROUTER_TIER` (`free`\|`credit`) |
 | Google AI Studio | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_AI_STUDIO_KEY` / `FREELM_GOOGLE_KEYS` | `FREELM_GOOGLE_TIER` (`free`\|`tier1`) |
 | NVIDIA NIM | `NVIDIA_API_KEY` / `NIM_API_KEY` / `FREELM_NIM_KEYS` | `FREELM_NIM_TIER` (`free`) |
+| Groq | `GROQ_API_KEY` / `FREELM_GROQ_KEYS` | `FREELM_GROQ_TIER` (`free`) |
+| Cerebras | `CEREBRAS_API_KEY` / `FREELM_CEREBRAS_KEYS` | `FREELM_CEREBRAS_TIER` (`free`) |
+| Mistral | `MISTRAL_API_KEY` / `FREELM_MISTRAL_KEYS` | `FREELM_MISTRAL_TIER` (`free`) |
 
-Multiple keys per provider: comma-separate them.
+Multiple keys per provider: comma-separate them. See `.env.example`.
 
 ## Virtual models
 

@@ -3,6 +3,25 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.2.0] - 2026-06-07
+
+### Added
+- **Streaming**: `FreeLLM.stream()` and `AsyncFreeLLM.astream()` yield content
+  deltas (SSE), normalized across providers, with failover *before* the first
+  token (no mid-stream switching once tokens flow).
+- **Three more free providers** (all OpenAI-compatible), with free-tier limits
+  verified 2026-06: **Groq** (30 RPM / 14.4K req-day), **Cerebras** (~30 RPM /
+  1M tokens-day, 8K ctx), **Mistral** (2 RPM / 500K TPM / 1B-month). Env config:
+  `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `MISTRAL_API_KEY`.
+- `.env.example` and an env-only `examples/e2e_smoke.py` (keys are never inlined).
+
+### Changed
+- Default `auto` model order leads with fast plain instruct models; giant
+  (>150B) and reasoning models are deprioritized (they were slow and verbose
+  for a default — surfaced by live E2E testing).
+
+[0.2.0]: https://github.com/shihabshahrier/freelm/releases/tag/v0.2.0
+
 ## [0.1.1] - 2026-06-07
 
 ### Fixed
