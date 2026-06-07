@@ -8,6 +8,8 @@ from ._breaker import CircuitBreaker
 from ._ratelimit import TokenBucket
 
 DAY = 86400.0
+# stand-in for "unlimited" daily quota so it ranks high but stays finite/comparable
+UNLIMITED = 100_000.0
 
 
 @dataclass
@@ -58,10 +60,13 @@ class KeyState:
         return True
 
     def remaining(self, now: float) -> float:
-        """A rough 'how much headroom' score for quota-aware routing."""
-        self._roll_daily(now)
-        daily = float("inf") if self.rpd is None else float(max(0, self.rpd - self.rpd_used))
-        burst = self.bucket.peek(now) if self.bucket is not None else float("inf")
+        """Headroom score for quota-aware routing: current rpm tokens bounded by
+        daily quota left. Not-ready keys (cooling/disabled/exhausted) score 0 so
+        they don't attract traffic. 'Unlimited' daily is capped, not infinite."""
+        if not self.ready(now):
+            return 0.0
+        daily = UNLIMITED if self.rpd is None else float(max(0, self.rpd - self.rpd_used))
+        burst = self.bucket.peek(now) if self.bucket is not None else UNLIMITED
         return min(daily, burst)
 
     def wait_time(self, now: float) -> Optional[float]:

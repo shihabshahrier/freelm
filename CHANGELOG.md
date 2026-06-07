@@ -3,6 +3,24 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.1.1] - 2026-06-07
+
+### Fixed
+- **Failover starvation**: candidates are now interleaved breadth-first across
+  providers, so a provider with many throttled free models can no longer starve
+  the others. Default `max_attempts` raised 6 → 12; added an overall per-call
+  deadline derived from `timeout`.
+- `wait=True` now retries keys that recover during the sleep (previously it
+  skipped any already-tried key).
+- `quota_aware` no longer treats unlimited daily quota as infinite, and scores
+  cooling/disabled keys as 0 headroom.
+- Refund the daily-quota slot when a request fails with 404 `ModelNotFound`.
+
+### Docs
+- Documented tuning knobs (`max_attempts` / `timeout` / `wait` / `priority` / ...),
+  strategy semantics, error hierarchy, response + `health()` reference, and a
+  concurrency note.
+
 ## [0.1.0] - 2026-06-07
 
 Initial release.
@@ -21,4 +39,5 @@ Initial release.
 - OpenAI drop-in shim: `freelm.compat.OpenAI` / `AsyncOpenAI`.
 - `FreeLLM.from_env()` config from environment; `llm.health()` introspection.
 
+[0.1.1]: https://github.com/shihabshahrier/freelm/releases/tag/v0.1.1
 [0.1.0]: https://github.com/shihabshahrier/freelm/releases/tag/v0.1.0

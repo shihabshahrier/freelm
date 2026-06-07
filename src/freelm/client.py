@@ -13,7 +13,7 @@ from .errors import ConfigError, NoProvidersAvailable, ProviderError, Transient
 from .providers.base import Provider
 from .strategy import Candidate, STRATEGIES
 
-_DEFAULT_UA = "freelm/0.1.0"
+_DEFAULT_UA = "freelm/0.1.1"
 
 
 class _BaseClient:
@@ -22,7 +22,7 @@ class _BaseClient:
         providers: Sequence[Provider],
         *,
         strategy: str = "priority",
-        max_attempts: int = 6,
+        max_attempts: int = 12,
         timeout: float = 60.0,
         wait: bool = False,
         max_wait: float = 20.0,
@@ -104,11 +104,14 @@ class FreeLLM(_BaseClient):
 
         while len(attempts) < self.max_attempts:
             now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                break
             cand = engine.select_candidate(self.providers, self.strategy, self._rr, req.model, tried, now)
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
                     time.sleep(min(w, self.max_wait) + 0.01)
+                    tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
                 break
 
@@ -211,11 +214,14 @@ class AsyncFreeLLM(_BaseClient):
 
         while len(attempts) < self.max_attempts:
             now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                break
             cand = engine.select_candidate(self.providers, self.strategy, self._rr, req.model, tried, now)
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
                     await asyncio.sleep(min(w, self.max_wait) + 0.01)
+                    tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
                 break
 

@@ -124,10 +124,103 @@ llm.refresh_models()                        # force re-fetch on next call
 | `FREELM_CACHE_DIR` | `~/.cache/freelm` | where the model cache lives (file is `0600`) |
 | `FREELM_CACHE_TTL` | `3600` | cache lifetime in seconds |
 
+## Configuration & tuning
+
+Client knobs — `FreeLLM(...)` / `AsyncFreeLLM(...)`:
+
+| Param | Default | What it does |
+|-------|---------|--------------|
+| `strategy` | `"priority"` | how providers are ranked (see below) |
+| `max_attempts` | `12` | hard cap on total tries across all providers/keys/models per call |
+| `timeout` | `60.0` | per-request timeout (s); also the overall deadline for one `chat()` |
+| `wait` | `False` | if every key is cooling, sleep until one frees instead of failing |
+| `max_wait` | `20.0` | longest single sleep (s) when `wait=True` |
+| `http_client` | `None` | bring your own `httpx.Client` / `AsyncClient` |
+
+Provider knobs — `OpenRouter(...)`, `GoogleAIStudio(...)`, `NIM(...)`:
+
+| Param | Default | What it does |
+|-------|---------|--------------|
+| `keys` | — | one key (str) or many (list, or comma-string via env) |
+| `tier` | `"free"` | selects built-in rpm/rpd limits |
+| `priority` | `0` | **lower = tried first** (with `strategy="priority"`) |
+| `rpm` / `rpd` | tier default | override requests-per-minute / per-day |
+| `models` | discovered / built-in | override model list (order = preference) |
+| `discover` | OpenRouter `True`, else `False` | live-fetch `/models` |
+| `cache_ttl` | env / 1h | discovery cache lifetime |
+
+### Strategies
+
+| Strategy | Behaviour |
+|----------|-----------|
+| `priority` | providers in ascending `priority`, then list order. Deterministic. |
+| `round_robin` | rotate which provider goes first each call. Spreads load evenly. |
+| `quota_aware` | rank by current headroom (rpm tokens bounded by daily quota); cooling/disabled keys score 0. Unlimited-quota providers rank high but **deplete as used**, so traffic still spreads. |
+| `latency` | prefer the provider with the lowest observed average latency. |
+
+Whatever the ranking, candidates are **interleaved across providers** — the best model of *every* provider is tried before any provider's 2nd model — so failover always reaches every provider, even when your first provider has dozens of throttled free models.
+
+### Defining your own priority order
+
+```python
+from freelm import FreeLLM, OpenRouter, GoogleAIStudio, NIM
+
+llm = FreeLLM(
+    [
+        OpenRouter("sk-or-...",   priority=0),   # try first
+        GoogleAIStudio("AIza...", priority=1),   # then this
+        NIM("nvapi-...",          priority=2),   # last resort
+    ],
+    strategy="priority",
+)
+```
+
+Within a provider, model preference is the order of its `models` list:
+
+```python
+from freelm import OpenRouter, ModelSpec
+
+OpenRouter("sk-or-...", discover=False, models=[
+    ModelSpec("openai/gpt-oss-120b:free", ("chat", "large")),
+    ModelSpec("meta-llama/llama-3.3-70b-instruct:free", ("chat", "large")),
+])
+```
+
+## Errors
+
+```python
+from freelm import NoProvidersAvailable, ProviderError
+
+try:
+    resp = llm.chat("hi")
+except NoProvidersAvailable as e:
+    print("all providers exhausted:", e.attempts)   # [(candidate, exception), ...]
+except ProviderError as e:
+    print(e.provider, e.status, e.retryable)         # e.g. a malformed 400
+```
+
+Hierarchy: `FreeLLMError` → `ConfigError` · `NoProvidersAvailable` · `ProviderError` → `AuthError` / `RateLimited` / `Transient` / `ModelNotFound`. Retryable errors (`RateLimited`, `Transient`) are handled internally and only surface, bundled, inside `NoProvidersAvailable`.
+
+## Response & introspection
+
+```python
+r = llm.chat("hi")
+r.text          # assistant text (also: str(r))
+r.provider      # which provider served it, e.g. "openrouter"
+r.model         # concrete model id used
+r.usage         # .prompt_tokens / .completion_tokens / .total_tokens
+r.latency_ms    # round-trip latency
+r.raw           # original provider JSON
+```
+
+`llm.health()` → one dict per key: `provider`, `key` (masked), `ready`, `breaker`, `rpd_used`, `last_error`, `ewma_latency_ms`.
+
+> **Concurrency:** `AsyncFreeLLM` is safe across many concurrent tasks on one event loop. A sync `FreeLLM` mutates per-key state without locks — use one client per thread, or use the async client, for multi-threaded workloads.
+
 ## How "always-up" works
 
 - **Key pool** per provider, round-robined to spread load.
-- **Failover chain**: key → next key → next provider until one succeeds.
+- **Failover chain**: interleaved across providers (best model of each, then next-best) so every provider is reached fast — never starved by one provider's many models.
 - **Circuit breaker** per key: opens after repeated failures, half-opens after a cooldown — no hammering a dead key.
 - **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → breaker + backoff; `401/403` → disable the key; `4xx` model errors → try another model/provider; other `4xx` → surfaced as a caller bug.
 - **Quota guard**: per-key requests/minute (token bucket) + requests/day counter, so a key predicted to be exhausted is skipped before you waste a call.

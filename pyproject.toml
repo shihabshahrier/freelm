@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freelm"
-version = "0.1.0"
+version = "0.1.1"
 description = "One always-up LLM client over free-tier providers (OpenRouter, Google AI Studio, NVIDIA NIM) with auto key-rotation, failover, circuit breaking and quota-aware routing."
 readme = "README.md"
 requires-python = ">=3.9"

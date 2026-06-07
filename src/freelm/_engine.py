@@ -31,6 +31,13 @@ def select_candidate(
     return None
 
 
+def forget_recovered(providers: List[Any], tried: Set[TriedKey], now: float) -> Set[TriedKey]:
+    """Drop ``tried`` entries whose key is ready again, so a key that was cooling
+    can be retried after a ``wait``. Bounded by ``max_attempts`` in the caller."""
+    ready_keys = {(p.name, k.key) for p in providers for k in p.keys if k.ready(now)}
+    return {t for t in tried if (t[0], t[1]) not in ready_keys}
+
+
 def soonest_wait(providers: List[Any], now: float) -> Optional[float]:
     """Smallest wait until *some* non-disabled key becomes ready, or None."""
     waits: List[float] = []
@@ -66,6 +73,8 @@ def apply_error(cand: Candidate, exc: ProviderError, now: float) -> None:
             k.last_error = "rate_limited"
     elif isinstance(exc, ModelNotFound):
         k.last_error = "model_missing"  # don't penalise the key for a bad model id
+        if k.rpd is not None and k.rpd_used > 0:
+            k.rpd_used -= 1  # a 404 never hit inference -> refund the daily slot
     elif isinstance(exc, Transient):
         k.breaker.on_failure(now)
         delay = exc.retry_after if exc.retry_after is not None else compute_delay(k.breaker.failures)

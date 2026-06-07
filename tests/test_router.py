@@ -4,7 +4,7 @@ import respx
 
 from conftest import ok_payload
 
-from freelm import FreeLLM, GoogleAIStudio, NIM, NoProvidersAvailable, OpenRouter
+from freelm import FreeLLM, GoogleAIStudio, ModelSpec, NIM, NoProvidersAvailable, OpenRouter
 
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 G_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
@@ -102,6 +102,38 @@ def test_key_scoped_429_cools_the_key():
     with pytest.raises(NoProvidersAvailable):
         llm.chat("hello")
     assert llm.providers[0].keys[0].cooldown_until > 0.0  # whole key cooled
+    llm.close()
+
+
+@respx.mock
+def test_interleave_reaches_second_provider_despite_many_models():
+    # provider 1 has MANY models, all model-scoped throttled (key stays hot).
+    # breadth-first interleaving must still reach provider 2 quickly.
+    respx.post(OR_URL).mock(return_value=httpx.Response(429, text="temporarily rate-limited upstream"))
+    respx.post(G_URL).mock(return_value=httpx.Response(200, json=ok_payload("google")))
+    many = [ModelSpec(f"vendor/m{i}:free", ("chat", "large")) for i in range(10)]
+    llm = FreeLLM(
+        [OpenRouter("k", models=many, discover=False), GoogleAIStudio("k2")],
+        strategy="priority",
+    )
+    r = llm.chat("hi")
+    assert r.provider == "google"   # would starve under old provider-major ordering
+    llm.close()
+
+
+@respx.mock
+def test_wait_retries_recovered_key():
+    # single key cools for ~1s, then recovers; wait=True should retry it.
+    route = respx.post(OR_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "1"}, text="account rate limit"),
+            httpx.Response(200, json=ok_payload("recovered")),
+        ]
+    )
+    llm = FreeLLM([OpenRouter("only-key", discover=False)], wait=True, max_wait=3)
+    r = llm.chat("hi")
+    assert r.text == "recovered"
+    assert route.call_count == 2
     llm.close()
 
 
