@@ -10,6 +10,13 @@ def test_new_providers_construct():
         assert p.headers("key")["Authorization"] == "Bearer key"
 
 
+def test_new_providers_have_discovery_enabled():
+    # runtime /models discovery self-corrects their model IDs
+    assert Groq("k").discover is True
+    assert Cerebras("k").discover is True
+    assert Mistral("k").discover is True
+
+
 def test_from_env_includes_new_providers(monkeypatch):
     for var in ("OPENROUTER_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "NVIDIA_API_KEY"):
         monkeypatch.delenv(var, raising=False)

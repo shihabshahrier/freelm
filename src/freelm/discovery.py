@@ -18,6 +18,12 @@ from . import _cache
 from .registry import ModelSpec
 
 _SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b")
+# substrings that mark a non-chat model — some providers' /models list audio,
+# embedding, etc. with no modality metadata, so filter them out by name.
+_NON_CHAT = (
+    "whisper", "tts", "text-to-speech", "speech", "audio", "transcribe",
+    "embed", "embedding", "rerank", "moderation", "guard", "ocr", "-vision-encoder",
+)
 _LARGE_HINTS = ("ultra", "super", "-405", "235b", "120b", "-large", "-xl")
 _SMALL_HINTS = ("mini", "nano", "small", "lite", "tiny", "-xs", "edge")
 
@@ -51,6 +57,8 @@ def to_specs(api_models: List[Dict[str, Any]], *, free_only: bool) -> List[Model
             continue
         if free_only and not mid.endswith(":free"):
             continue
+        if any(t in mid.lower() for t in _NON_CHAT):
+            continue  # audio / embedding / etc. — not a chat model
 
         arch = m.get("architecture") or {}
         out_mod = m.get("output_modalities") or arch.get("output_modalities") or ["text"]

@@ -17,7 +17,13 @@ class Mistral(Provider):
         "free": {"rpm": 2, "rpd": None},
     }
 
+    # Mistral maintains rolling "-latest" aliases; exact dated IDs churn, so
+    # runtime discovery replaces this fallback with the account's real /models.
     DEFAULT_MODELS = [
         ModelSpec("mistral-small-latest", ("chat", "large", "tools"), ctx=32000),
-        ModelSpec("open-mistral-nemo", ("chat", "small", "fast"), ctx=128000),
+        ModelSpec("mistral-large-latest", ("chat", "large", "tools"), ctx=128000),
     ]
+
+    def __init__(self, keys, **kw):
+        kw.setdefault("discover", True)
+        super().__init__(keys, **kw)

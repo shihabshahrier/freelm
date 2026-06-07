@@ -3,6 +3,18 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.2.1] - 2026-06-07
+
+### Fixed
+- Verified provider model IDs against official docs; corrected stale Mistral
+  fallback IDs (`open-mistral-nemo` → `-latest` aliases). Groq, Cerebras, and
+  Mistral now run live `/models` discovery so their model lists self-correct at
+  runtime — the hardcoded lists are offline fallbacks only.
+- Discovery filters out non-chat models (whisper / TTS / embedding / rerank /
+  guard / OCR) that some providers list without modality metadata.
+
+[0.2.1]: https://github.com/shihabshahrier/freelm/releases/tag/v0.2.1
+
 ## [0.2.0] - 2026-06-07
 
 ### Added

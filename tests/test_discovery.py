@@ -33,6 +33,18 @@ def _tmp_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("FREELM_CACHE_DIR", str(tmp_path))
 
 
+def test_to_specs_excludes_non_chat_models():
+    data = [
+        {"id": "vendor/chat-70b", "context_length": 8192},
+        {"id": "whisper-large-v3", "context_length": 0},
+        {"id": "vendor/text-embedding-3", "context_length": 0},
+        {"id": "playai-tts", "context_length": 0},
+        {"id": "vendor/llama-guard-8b", "context_length": 8192},
+    ]
+    ids = [s.id for s in to_specs(data, free_only=False)]
+    assert ids == ["vendor/chat-70b"]  # audio/embed/tts/guard dropped
+
+
 def test_to_specs_filters_and_tags():
     specs = to_specs(MODELS_JSON["data"], free_only=True)
     ids = [s.id for s in specs]
