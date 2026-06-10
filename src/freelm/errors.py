@@ -74,6 +74,15 @@ class ModelNotFound(ProviderError):
         super().__init__(provider, status, message, retryable=False, model_missing=True)
 
 
+class QuotaExhausted(ProviderError):
+    """402 — the account is out of credits/quota (e.g. OpenRouter below the free
+    threshold). The key is disabled for this process and we fail over, like an
+    auth error — it won't recover without human action."""
+
+    def __init__(self, provider: str, status: int, message: str = "") -> None:
+        super().__init__(provider, status, message, retryable=False)
+
+
 class NoProvidersAvailable(FreeLLMError):
     """Every candidate provider/key was exhausted or unavailable."""
 
@@ -115,6 +124,8 @@ def classify(status: int, headers: Optional[Dict[str, str]], body: str, provider
     low = (body or "").lower()
     if status in (401, 403):
         return AuthError(provider, status, msg)
+    if status == 402:
+        return QuotaExhausted(provider, status, msg)
     if status == 429:
         return RateLimited(provider, status, msg, retry_after=retry_after)
     if status in _TRANSIENT_STATUS:

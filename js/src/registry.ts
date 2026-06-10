@@ -23,7 +23,7 @@ export function resolveModels(models: ModelSpec[], alias: string): string[] {
   const base = idx >= 0 ? a.slice(0, idx) : a;
   const size = idx >= 0 ? a.slice(idx + 1) : "";
 
-  if (!VIRTUAL.has(base) && !size) return [alias]; // unknown -> assume a real model id
+  if (!VIRTUAL.has(base)) return [alias]; // unknown -> a concrete model id (possibly with a suffix like ":free")
 
   let want = size || (["auto", "chat", "default"].includes(base) ? "" : base);
   want = SIZE_ALIASES[want] ?? want;

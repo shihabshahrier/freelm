@@ -1,12 +1,12 @@
 {
   "name": "freelm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Free, always-up LLM client over free-tier providers (OpenRouter, Google Gemini, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic failover, key rotation, streaming, and live model discovery. OpenAI-compatible.",
   "keywords": [
     "llm", "free-llm", "free llm api", "llm-gateway", "llm-router", "ai-gateway",
     "openrouter", "gemini", "groq", "cerebras", "mistral", "nvidia-nim",
     "openai", "openai-compatible", "failover", "fallback", "rate-limit",
-    "ai", "typescript", "free"
+    "ai", "typescript", "nodejs", "free", "free-tier", "streaming", "model-discovery"
   ],
   "license": "MIT",
   "author": "Shihab Shahriar Antor <shahriarlabs@gmail.com>",

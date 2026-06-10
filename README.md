@@ -1,14 +1,14 @@
-# freelm — free, always-up LLM client for Python
+# freelm — free, always-up LLM client for Python & JavaScript
 
 [![PyPI version](https://img.shields.io/pypi/v/freelm.svg)](https://pypi.org/project/freelm/)
 [![Python versions](https://img.shields.io/pypi/pyversions/freelm.svg)](https://pypi.org/project/freelm/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**freelm is a free, always-up LLM client and gateway for Python** that pools multiple free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), NVIDIA NIM, Groq, Cerebras, and Mistral** — behind one OpenAI-compatible call (with streaming), with automatic API-key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
+**freelm is a free, always-up LLM client and gateway for Python (and JS/TS)** that pools six free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), NVIDIA NIM, Groq, Cerebras, and Mistral** — behind one OpenAI-compatible call (with streaming), with automatic API-key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
 
 📦 **PyPI:** https://pypi.org/project/freelm/ — `pip install freelm`
 
-> Python first. JS/TS and Go ports planned (the core is spec-driven for portability).
+> Python + JS/TS (`npm install freelm`, lives in [`js/`](js/)). A Go port is planned (the core is spec-driven for portability).
 
 ## Why
 
@@ -100,6 +100,15 @@ r = client.chat.completions.create(
     messages=[{"role": "user", "content": "hi"}],
 )
 print(r.choices[0].message.content)
+```
+
+OpenAI-SDK constructor arguments (`api_key`, `base_url`, `organization`, ...) are
+accepted and ignored — keys come from the environment. `stream=True` works and
+yields `chat.completion.chunk`-shaped objects:
+
+```python
+for chunk in client.chat.completions.create(model="auto", messages=msgs, stream=True):
+    print(chunk.choices[0].delta.content or "", end="")
 ```
 
 ## Environment variables
@@ -233,7 +242,7 @@ except ProviderError as e:
     print(e.provider, e.status, e.retryable)         # e.g. a malformed 400
 ```
 
-Hierarchy: `FreeLLMError` → `ConfigError` · `NoProvidersAvailable` · `ProviderError` → `AuthError` / `RateLimited` / `Transient` / `ModelNotFound`. Retryable errors (`RateLimited`, `Transient`) are handled internally and only surface, bundled, inside `NoProvidersAvailable`.
+Hierarchy: `FreeLLMError` → `ConfigError` · `NoProvidersAvailable` · `ProviderError` → `AuthError` / `QuotaExhausted` / `RateLimited` / `Transient` / `ModelNotFound`. Retryable errors (`RateLimited`, `Transient`) are handled internally and only surface, bundled, inside `NoProvidersAvailable`. `AuthError` (401/403) and `QuotaExhausted` (402, e.g. OpenRouter out of credits) disable the key and fail over instead of aborting the call.
 
 ## Response & introspection
 
@@ -256,7 +265,7 @@ r.raw           # original provider JSON
 - **Key pool** per provider, round-robined to spread load.
 - **Failover chain**: interleaved across providers (best model of each, then next-best) so every provider is reached fast — never starved by one provider's many models.
 - **Circuit breaker** per key: opens after repeated failures, half-opens after a cooldown — no hammering a dead key.
-- **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → breaker + backoff; `401/403` → disable the key; `4xx` model errors → try another model/provider; other `4xx` → surfaced as a caller bug.
+- **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → breaker + backoff; `401/403`/`402` → disable the key; `4xx` model errors → try another model/provider; other `4xx` → surfaced as a caller bug.
 - **Quota guard**: per-key requests/minute (token bucket) + requests/day counter, so a key predicted to be exhausted is skipped before you waste a call.
 - **`wait=True`** (optional): briefly sleep until a key frees up instead of failing, bounded by `max_wait`.
 
@@ -269,18 +278,38 @@ for row in llm.health():
 
 ## Roadmap
 
-- v1.1 — streaming (SSE normalization across providers)
-- v1.2 — persistent quota tracking (sqlite/json) + tighter tier pacing
-- v1.3 — tool / function-calling normalization
-- v2 — embeddings, vision; JS/TS and Go ports
+Shipped: streaming (0.2.0), JS/TS port (npm `freelm`).
+
+- next — persistent quota tracking (sqlite/json) + tighter tier pacing
+- then — tool / function-calling normalization
+- later — embeddings, vision; Go port
+
+## How freelm compares
+
+freelm is a **client-side, free-tier-only failover layer** — not a proxy server, not an agent framework:
+
+| Tool | What it is | How freelm differs |
+|------|------------|--------------------|
+| **LiteLLM** | SDK + proxy server for 100+ providers (paid & free) | freelm is free-only, zero-infrastructure (no proxy to run), with quota/breaker state per key built in |
+| **OpenRouter SDK** | Client for one aggregator | OpenRouter is *one* of freelm's six pools — when its free quota dries up, freelm fails over to Gemini, Groq, Cerebras, Mistral, or NIM directly |
+| **LangChain / LlamaIndex** | Orchestration frameworks | freelm is a thin client; use it *inside* them via the OpenAI-compatible shim |
 
 ## FAQ
 
 ### How do I use free LLMs in Python?
-Install `freelm`, set one or more free API keys (OpenRouter, Google AI Studio, or NVIDIA NIM) as environment variables, and call `freelm.FreeLLM.from_env().text("...")`. freelm picks an available free model and handles rate limits and failover automatically.
+Install `freelm`, set one or more free API keys (OpenRouter, Google AI Studio, NVIDIA NIM, Groq, Cerebras, or Mistral) as environment variables, and call `freelm.FreeLLM.from_env().text("...")`. freelm picks an available free model and handles rate limits and failover automatically.
 
-### How do I fall back between OpenRouter, Gemini, and NVIDIA NIM?
-Pass several providers to `FreeLLM([...])`. On a rate limit (`429`), dead key (`401`), or server error, freelm rotates keys and fails over to the next provider — interleaved so every provider is reached quickly instead of stalling on one.
+### How do I use free LLMs in JavaScript / Node.js / TypeScript?
+`npm install freelm` (Node ≥ 18, zero runtime dependencies), set the same env keys, and call `await FreeLLM.fromEnv().text("...")`. The TypeScript package mirrors the Python API — same providers, same failover engine, same streaming.
+
+### Is there a free alternative to the OpenAI API?
+Yes. Six providers ship usable free tiers in 2026 — OpenRouter (`:free` models), Google AI Studio, NVIDIA NIM, Groq, Cerebras, and Mistral — and `freelm.compat.OpenAI` is a drop-in for the OpenAI SDK that routes `chat.completions.create(...)` across all of them with automatic failover, including `stream=True`.
+
+### Which LLM providers have free API tiers in 2026?
+Verified 2026-06: **OpenRouter** (~50 req/day under $10 lifetime credit, ~1000/day at ≥$10), **Google AI Studio** (per-model free quotas), **NVIDIA NIM** (free against build.nvidia.com credits), **Groq** (30 RPM / 14,400 req/day, no card), **Cerebras** (~30 RPM, 1M tokens/day), **Mistral** (Experiment tier: 2 RPM, 1B tokens/month). freelm ships these as tier defaults you can override.
+
+### How do I fall back between OpenRouter, Gemini, Groq, and the other free providers?
+Pass several providers to `FreeLLM([...])`. On a rate limit (`429`), dead key (`401`), exhausted credits (`402`), or server error, freelm rotates keys and fails over to the next provider — interleaved so every provider is reached quickly instead of stalling on one.
 
 ### Is there an OpenAI-compatible free LLM client?
 Yes — `from freelm.compat import OpenAI` is a drop-in for the OpenAI SDK (`client.chat.completions.create(...)`), backed by free providers.

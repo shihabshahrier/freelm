@@ -49,6 +49,13 @@ export class ModelNotFound extends ProviderError {
   }
 }
 
+/** 402 — account out of credits/quota. Key gets disabled, call fails over. */
+export class QuotaExhausted extends ProviderError {
+  constructor(provider: string, status: number, detail = "") {
+    super(provider, status, detail, false);
+  }
+}
+
 export class NoProvidersAvailable extends FreeLLMError {
   constructor(public attempts: Array<[any, Error]>) {
     const detail = attempts
@@ -75,6 +82,7 @@ export function classify(status: number, headers: Record<string, string>, body: 
   const msg = (body || "").slice(0, 300);
   const low = (body || "").toLowerCase();
   if (status === 401 || status === 403) return new AuthError(provider, status, msg);
+  if (status === 402) return new QuotaExhausted(provider, status, msg);
   if (status === 429) return new RateLimited(provider, status, msg, retryAfter);
   if (TRANSIENT_STATUS.has(status)) return new Transient(provider, status, msg, retryAfter);
   if (status === 404 || ((status === 400 || status === 422) && low.includes("model"))) {

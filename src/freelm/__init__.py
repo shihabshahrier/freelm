@@ -27,13 +27,13 @@ from .errors import (
     ModelNotFound,
     NoProvidersAvailable,
     ProviderError,
+    QuotaExhausted,
     RateLimited,
     Transient,
 )
 from .providers import Cerebras, Gemini, GoogleAIStudio, Groq, Mistral, NIM, OpenRouter, Provider
 from .registry import ModelSpec
-
-__version__ = "0.2.2"
+from ._version import __version__
 
 __all__ = [
     "FreeLLM",
@@ -58,6 +58,7 @@ __all__ = [
     "ConfigError",
     "ProviderError",
     "AuthError",
+    "QuotaExhausted",
     "RateLimited",
     "Transient",
     "ModelNotFound",

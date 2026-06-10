@@ -1,4 +1,4 @@
-# freelm (JS/TS)
+# freelm — free, always-up LLM client for Node.js & TypeScript
 
 [![npm](https://img.shields.io/npm/v/freelm.svg)](https://www.npmjs.com/package/freelm)
 [![license](https://img.shields.io/npm/l/freelm.svg)](../LICENSE)
@@ -67,6 +67,15 @@ const r = await client.chat.completions.create({
 console.log(r.choices[0].message.content);
 ```
 
+OpenAI-SDK constructor options (`{ apiKey, baseURL, ... }`) are accepted and
+ignored — keys come from the environment. `stream: true` yields
+`chat.completion.chunk`-shaped objects:
+
+```ts
+const stream = await client.chat.completions.create({ model: "auto", messages, stream: true });
+for await (const chunk of stream) process.stdout.write(chunk.choices[0].delta.content ?? "");
+```
+
 ## Environment variables
 
 | Provider | Key vars (first match wins) | Tier var |
@@ -94,10 +103,24 @@ for (const m of (await listFreeModels()).slice(0, 5)) console.log(m.id, m.tags);
 - **Key pool** per provider, rotated to spread load.
 - **Failover** interleaved across providers, so every provider is reached fast.
 - **Circuit breaker** per key — opens after repeated failures, half-opens after a cooldown.
-- **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → backoff; `401` → disable the key; model errors → next model.
+- **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → backoff; `401`/`402` → disable the key; model errors → next model.
 - **Quota guard**: per-key requests/minute + requests/day, skipping keys predicted exhausted.
 
 Inspect live state with `llm.health()`.
+
+## FAQ
+
+### How do I use free LLMs in Node.js or TypeScript?
+`npm install freelm` (Node ≥ 18, zero runtime dependencies), set one or more free API keys (OpenRouter, Google AI Studio, NVIDIA NIM, Groq, Cerebras, or Mistral) as environment variables, and call `await FreeLLM.fromEnv().text("...")`. freelm picks an available free model and handles rate limits and failover automatically.
+
+### Is there an OpenAI-compatible free LLM client for JavaScript?
+Yes — `import { OpenAI } from "freelm/compat"` is a drop-in for the OpenAI SDK (`client.chat.completions.create(...)`, including `stream: true`), backed by free-tier providers with automatic failover.
+
+### How do I avoid free-tier rate limits?
+freelm paces each key with a requests-per-minute token bucket plus a daily counter, skips keys predicted to be exhausted, and fails over across providers on `429`/`402`/`5xx`. Add more keys or providers to raise total throughput.
+
+### Is freelm really free?
+freelm itself is MIT-licensed. It runs on the providers' own free tiers (verified 2026-06) — actual limits depend on each provider's quota, and you can override them per provider.
 
 ## License
 

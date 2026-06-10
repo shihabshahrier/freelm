@@ -13,10 +13,11 @@ export {
   ConfigError,
   ProviderError,
   AuthError,
+  QuotaExhausted,
   RateLimited,
   Transient,
   ModelNotFound,
   NoProvidersAvailable,
 } from "./errors.js";
 
-export const VERSION = "0.1.0";
+export { VERSION } from "./version.js";

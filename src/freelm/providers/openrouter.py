@@ -43,7 +43,9 @@ class OpenRouter(Provider):
 
     def rate_limit_scope(self, body: str) -> str:
         b = (body or "").lower()
-        # e.g. "<model> is temporarily rate-limited upstream"
-        if "rate-limited upstream" in b or "temporarily" in b:
+        # e.g. "<model> is temporarily rate-limited upstream". Deliberately narrow:
+        # a bare "temporarily" also appears in account-wide 429s, which must cool
+        # the key instead of hammering it with the next model.
+        if "rate-limited upstream" in b:
             return "model"
         return "key"

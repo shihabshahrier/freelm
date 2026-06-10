@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ._backoff import compute_delay
-from .errors import AuthError, ModelNotFound, ProviderError, RateLimited, Transient
+from .errors import AuthError, ModelNotFound, ProviderError, QuotaExhausted, RateLimited, Transient
 from .strategy import Candidate, order_candidates
 
 TriedKey = Tuple[str, str, str]
@@ -53,7 +53,8 @@ def apply_success(cand: Candidate, latency_ms: float) -> None:
     k = cand.key
     k.breaker.on_success()
     k.last_error = None
-    k.ewma_latency = latency_ms if k.ewma_latency == 0 else 0.7 * k.ewma_latency + 0.3 * latency_ms
+    if latency_ms > 0:  # <=0 means "no sample" (e.g. an empty stream) — don't decay the EWMA
+        k.ewma_latency = latency_ms if k.ewma_latency == 0 else 0.7 * k.ewma_latency + 0.3 * latency_ms
 
 
 def apply_error(cand: Candidate, exc: ProviderError, now: float) -> None:
@@ -63,6 +64,9 @@ def apply_error(cand: Candidate, exc: ProviderError, now: float) -> None:
     if isinstance(exc, AuthError):
         k.disabled = True
         k.last_error = f"auth:{exc.status}"
+    elif isinstance(exc, QuotaExhausted):
+        k.disabled = True  # out of credits — won't recover without human action
+        k.last_error = f"quota:{exc.status}"
     elif isinstance(exc, RateLimited):
         if getattr(exc, "scope", "key") == "model":
             # only this model is throttled upstream — keep the key hot, the
@@ -89,8 +93,8 @@ def should_raise(exc: ProviderError) -> bool:
     """A non-retryable, non-model error (e.g. malformed 400/422) is a caller bug:
     bail immediately instead of burning every key on the same broken request.
 
-    Auth errors are *not* fatal to the whole call — the key is disabled and we
-    fail over to other keys/providers."""
-    if isinstance(exc, AuthError):
+    Auth/quota errors are *not* fatal to the whole call — the key is disabled
+    and we fail over to other keys/providers."""
+    if isinstance(exc, (AuthError, QuotaExhausted)):
         return False
     return not exc.retryable and not exc.model_missing

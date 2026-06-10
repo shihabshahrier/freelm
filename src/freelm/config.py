@@ -5,6 +5,9 @@ Recognised vars (comma-separate to supply multiple keys per provider):
   OpenRouter : OPENROUTER_API_KEY   | FREELM_OPENROUTER_KEYS   (+ FREELM_OPENROUTER_TIER)
   Google     : GEMINI_API_KEY / GOOGLE_API_KEY / GOOGLE_AI_STUDIO_KEY | FREELM_GOOGLE_KEYS (+ FREELM_GOOGLE_TIER)
   NVIDIA NIM : NVIDIA_API_KEY / NIM_API_KEY | FREELM_NIM_KEYS         (+ FREELM_NIM_TIER)
+  Groq       : GROQ_API_KEY     | FREELM_GROQ_KEYS     (+ FREELM_GROQ_TIER)
+  Cerebras   : CEREBRAS_API_KEY | FREELM_CEREBRAS_KEYS (+ FREELM_CEREBRAS_TIER)
+  Mistral    : MISTRAL_API_KEY  | FREELM_MISTRAL_KEYS  (+ FREELM_MISTRAL_TIER)
 """
 from __future__ import annotations
 

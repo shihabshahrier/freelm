@@ -7,8 +7,9 @@ import { providersFromEnv } from "./config.js";
 import { Candidate, STRATEGIES, Strategy } from "./strategy.js";
 import { nowS, sleep } from "./time.js";
 import { buildPayload, buildRequest, ChatRequest, ChatResponse, MessageLike } from "./types.js";
+import { VERSION } from "./version.js";
 
-const UA = "freelm-js/0.1.0";
+const UA = `freelm-js/${VERSION}`;
 
 export interface FreeLLMOptions {
   strategy?: Strategy;
@@ -106,15 +107,22 @@ export class FreeLLM {
     this.discoveryDone = true;
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-    if (!this.timeout) return fetch(url, init);
+  /** AbortController armed with `timeout`; the caller re-arms it per phase
+   * (headers, body read, each stream chunk) and MUST call done() at the end —
+   * unlike httpx, fetch stops honouring a cleared timer once headers arrive,
+   * so a stalled body would otherwise hang forever. */
+  private timer(): { signal: AbortSignal | undefined; rearm: () => void; done: () => void } {
+    if (!this.timeout) return { signal: undefined, rearm: () => {}, done: () => {} };
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), this.timeout * 1000);
-    try {
-      return await fetch(url, { ...init, signal: ac.signal });
-    } finally {
-      clearTimeout(timer);
-    }
+    let t = setTimeout(() => ac.abort(), this.timeout * 1000);
+    return {
+      signal: ac.signal,
+      rearm: () => {
+        clearTimeout(t);
+        t = setTimeout(() => ac.abort(), this.timeout * 1000);
+      },
+      done: () => clearTimeout(t),
+    };
   }
 
   async chat(messages: MessageLike | MessageLike[], opts: ChatOptions = {}): Promise<ChatResponse> {
@@ -167,22 +175,37 @@ export class FreeLLM {
     const p = cand.provider;
     const body = buildPayload(req, cand.model);
     const t0 = nowS();
-    let res: Response;
+    const { signal, rearm, done } = this.timer();
     try {
-      res = await this.fetchWithTimeout(p.url, {
-        method: "POST",
-        headers: { ...p.headers(cand.key.key), "User-Agent": UA },
-        body: JSON.stringify(body),
-      });
-    } catch (e: any) {
-      throw new Transient(p.name, 0, `transport: ${e?.message ?? e}`);
+      let res: Response;
+      try {
+        res = await fetch(p.url, {
+          method: "POST",
+          headers: { ...p.headers(cand.key.key), "User-Agent": UA },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (e: any) {
+        throw new Transient(p.name, 0, `transport: ${e?.message ?? e}`);
+      }
+      rearm(); // body read gets its own timeout window
+      const dt = (nowS() - t0) * 1000;
+      if (res.status === 200) {
+        let data: any;
+        try {
+          data = await res.json();
+        } catch (e: any) {
+          throw new Transient(p.name, 0, `read: ${e?.message ?? e}`);
+        }
+        return p.parseResponse(data, dt);
+      }
+      const text = await res.text().catch(() => "");
+      const err = classify(res.status, headersObj(res), text, p.name);
+      if (err instanceof RateLimited) err.scope = p.rateLimitScope(text);
+      throw err;
+    } finally {
+      done();
     }
-    const dt = (nowS() - t0) * 1000;
-    if (res.status === 200) return p.parseResponse(await res.json(), dt);
-    const text = await res.text();
-    const err = classify(res.status, headersObj(res), text, p.name);
-    if (err instanceof RateLimited) err.scope = p.rateLimitScope(text);
-    throw err;
   }
 
   async *stream(messages: MessageLike | MessageLike[], opts: ChatOptions = {}): AsyncGenerator<string> {
@@ -211,8 +234,11 @@ export class FreeLLM {
       if (!cand.key.reserve(now)) continue;
 
       let produced = false;
+      let firstMs = 0; // time-to-first-token; feeds the latency EWMA
+      const t0 = nowS();
       try {
         for await (const chunk of this.streamRequest(cand, req)) {
+          if (!produced) firstMs = (nowS() - t0) * 1000;
           produced = true;
           yield chunk;
         }
@@ -225,7 +251,7 @@ export class FreeLLM {
         }
         throw e;
       }
-      engine.applySuccess(cand, 0);
+      engine.applySuccess(cand, firstMs);
       return;
     }
     throw new NoProvidersAvailable(attempts);
@@ -234,32 +260,48 @@ export class FreeLLM {
   private async *streamRequest(cand: Candidate, req: ChatRequest): AsyncGenerator<string> {
     const p = cand.provider;
     const body = { ...buildPayload(req, cand.model), stream: true };
+    const { signal, rearm, done: clearTimer } = this.timer();
     let res: Response;
     try {
-      res = await this.fetchWithTimeout(p.url, {
+      res = await fetch(p.url, {
         method: "POST",
         headers: { ...p.headers(cand.key.key), "User-Agent": UA },
         body: JSON.stringify(body),
+        signal,
       });
     } catch (e: any) {
+      clearTimer();
       throw new Transient(p.name, 0, `transport: ${e?.message ?? e}`);
     }
     if (res.status !== 200) {
-      const text = await res.text();
-      const err = classify(res.status, headersObj(res), text, p.name);
-      if (err instanceof RateLimited) err.scope = p.rateLimitScope(text);
-      throw err;
+      try {
+        const text = await res.text().catch(() => "");
+        const err = classify(res.status, headersObj(res), text, p.name);
+        if (err instanceof RateLimited) err.scope = p.rateLimitScope(text);
+        throw err;
+      } finally {
+        clearTimer();
+      }
     }
-    if (!res.body) return;
+    if (!res.body) {
+      clearTimer();
+      return;
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
     try {
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
+        rearm(); // inactivity timeout per chunk (mirrors httpx's read timeout)
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (e: any) {
+          throw new Transient(p.name, 0, `read: ${e?.message ?? e}`);
+        }
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf("\n")) >= 0) {
           const line = buf.slice(0, nl).trim();
@@ -271,6 +313,12 @@ export class FreeLLM {
       const delta = sseDelta(buf.trim());
       if (delta) yield delta;
     } finally {
+      clearTimer();
+      try {
+        await reader.cancel(); // close the connection if the consumer bailed early
+      } catch {
+        /* ignore */
+      }
       try {
         reader.releaseLock();
       } catch {

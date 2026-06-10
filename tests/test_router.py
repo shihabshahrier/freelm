@@ -43,6 +43,20 @@ def test_failover_across_providers():
 
 
 @respx.mock
+def test_quota_402_disables_key_and_fails_over():
+    # OpenRouter returns 402 when the account is out of credits — that must
+    # disable the key and fail over, not abort the whole call.
+    respx.post(OR_URL).mock(return_value=httpx.Response(402, text="Insufficient credits"))
+    respx.post(G_URL).mock(return_value=httpx.Response(200, json=ok_payload("from-google")))
+    with FreeLLM([OpenRouter("broke-key"), GoogleAIStudio("k2")], strategy="priority") as llm:
+        r = llm.chat("hello")
+    assert r.provider == "google"
+    key = llm.providers[0].keys[0]
+    assert key.disabled is True
+    assert key.last_error == "quota:402"
+
+
+@respx.mock
 def test_auth_disables_key_then_exhausts():
     respx.post(OR_URL).mock(return_value=httpx.Response(401, text="invalid key"))
     llm = FreeLLM([OpenRouter("bad-key")])

@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TokenBucket } from "../src/ratelimit.js";
 import { CircuitBreaker } from "../src/breaker.js";
 import { newKeyState } from "../src/keys.js";
-import { modelSpec, resolveModels } from "../src/index.js";
+import { applySuccess } from "../src/engine.js";
+import { modelSpec, resolveModels, VERSION } from "../src/index.js";
 
 describe("TokenBucket", () => {
   it("consumes and refills", () => {
@@ -51,5 +53,31 @@ describe("resolveModels", () => {
     expect(resolveModels(models, "fast")).toEqual(["small/model"]);
     expect(resolveModels(models, "small/model")).toEqual(["small/model"]);
     expect(resolveModels(models, "vendor/unknown-xyz")).toEqual(["vendor/unknown-xyz"]);
+  });
+
+  it("passes through unknown ids with a colon suffix verbatim", () => {
+    // must never silently fan out to the whole chat list
+    const models = [modelSpec("big/model:free", ["chat", "large"])];
+    expect(resolveModels(models, "moonshotai/kimi-k2:free")).toEqual(["moonshotai/kimi-k2:free"]);
+    expect(resolveModels(models, "big/model:free")).toEqual(["big/model:free"]); // exact still wins
+  });
+});
+
+describe("applySuccess", () => {
+  it("ignores zero-latency samples instead of decaying the EWMA", () => {
+    const k = newKeyState("k", "free", null, null);
+    k.ewmaLatency = 100;
+    const cand = { provider: null, key: k, model: "m" };
+    applySuccess(cand as any, 0); // "no sample" (e.g. empty stream)
+    expect(k.ewmaLatency).toBe(100);
+    applySuccess(cand as any, 200);
+    expect(k.ewmaLatency).toBeCloseTo(100 * 0.7 + 200 * 0.3);
+  });
+});
+
+describe("VERSION", () => {
+  it("matches package.json", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+    expect(VERSION).toBe(pkg.version);
   });
 });

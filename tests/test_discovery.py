@@ -91,6 +91,20 @@ def test_discover_falls_back_to_defaults_on_error():
 
 
 @respx.mock
+def test_discover_refetches_when_cache_yields_no_specs():
+    from freelm import _cache
+
+    # cached raw list filters down to zero usable chat models -> must NOT block
+    # the live fetch until TTL expiry
+    _cache.save("openrouter", [{"id": "whisper-large-v3"}])
+    route = respx.get(OR_MODELS).mock(return_value=httpx.Response(200, json=MODELS_JSON))
+    p = OpenRouter("k")
+    assert discover_sync(p) is True
+    assert route.call_count == 1
+    assert [m.id for m in p.models] == EXPECTED_ORDER
+
+
+@respx.mock
 def test_client_discovers_then_chats():
     respx.get(OR_MODELS).mock(return_value=httpx.Response(200, json=MODELS_JSON))
     respx.post(OR_CHAT).mock(return_value=httpx.Response(200, json=ok_payload("hi")))

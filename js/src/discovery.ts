@@ -91,9 +91,13 @@ function apply(provider: any, raw: any[]): boolean {
  * failure the provider keeps its hardcoded fallback models. */
 export async function discover(provider: any): Promise<boolean> {
   const cached = cache.load(provider.name);
-  if (cached) return apply(provider, cached);
+  // a cached list that yields no usable specs falls through to a live fetch
+  if (cached && apply(provider, cached)) return true;
   try {
-    const res = await fetch(provider.discoveryUrl(), { headers: provider.headers(provider.keys[0].key) });
+    const res = await fetch(provider.discoveryUrl(), {
+      headers: provider.headers(provider.keys[0].key),
+      signal: AbortSignal.timeout(15_000), // a stalled /models must not hang the first chat()
+    });
     if (res.status === 200) {
       const raw = rawModels(await res.json());
       if (raw.length) {

@@ -10,11 +10,12 @@ import httpx
 from . import _engine as engine
 from . import discovery
 from ._types import ChatResponse, build_request
+from ._version import __version__
 from .errors import ConfigError, NoProvidersAvailable, ProviderError, Transient
 from .providers.base import Provider
 from .strategy import Candidate, STRATEGIES
 
-_DEFAULT_UA = "freelm/0.2.2"
+_DEFAULT_UA = f"freelm/{__version__}"
 
 
 def _sse_delta(line: str) -> Optional[str]:
@@ -178,8 +179,12 @@ class FreeLLM(_BaseClient):
                 continue
 
             produced = False
+            first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
+            t0 = time.monotonic()
             try:
                 for chunk in self._stream_do(cand, req):
+                    if not produced:
+                        first_ms = (time.monotonic() - t0) * 1000.0
                     produced = True
                     yield chunk
             except ProviderError as exc:
@@ -188,7 +193,7 @@ class FreeLLM(_BaseClient):
                 if produced or engine.should_raise(exc):
                     raise
                 continue
-            engine.apply_success(cand, 0.0)
+            engine.apply_success(cand, first_ms)
             return
 
         raise NoProvidersAvailable(attempts)
@@ -354,8 +359,12 @@ class AsyncFreeLLM(_BaseClient):
                 continue
 
             produced = False
+            first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
+            t0 = time.monotonic()
             try:
                 async for chunk in self._astream_do(cand, req):
+                    if not produced:
+                        first_ms = (time.monotonic() - t0) * 1000.0
                     produced = True
                     yield chunk
             except ProviderError as exc:
@@ -364,7 +373,7 @@ class AsyncFreeLLM(_BaseClient):
                 if produced or engine.should_raise(exc):
                     raise
                 continue
-            engine.apply_success(cand, 0.0)
+            engine.apply_success(cand, first_ms)
             return
 
         raise NoProvidersAvailable(attempts)

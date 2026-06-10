@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freelm"
-version = "0.2.2"
+dynamic = ["version"]
 description = "Free LLM client + gateway: one always-up, OpenAI-compatible API (with streaming) over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,6 +16,7 @@ keywords = [
     "openai", "openai-compatible", "openai-api", "chatgpt", "claude", "gpt",
     "failover", "fallback", "rate-limit", "circuit-breaker", "resilience",
     "load-balancing", "model-router", "llm-api", "chatbot", "ai", "free",
+    "free-tier", "streaming", "model-discovery",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -36,11 +37,14 @@ classifiers = [
 dependencies = ["httpx>=0.24"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "respx>=0.20", "anyio>=4"]
+dev = ["pytest>=7", "respx>=0.20", "anyio>=4", "ruff>=0.4"]
 
 [project.urls]
 Homepage = "https://github.com/shihabshahrier/freelm"
 Issues = "https://github.com/shihabshahrier/freelm/issues"
+
+[tool.hatch.version]
+path = "src/freelm/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freelm"]
@@ -48,3 +52,7 @@ packages = ["src/freelm"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]

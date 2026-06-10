@@ -38,8 +38,8 @@ def resolve_models(models: List[ModelSpec], alias: str) -> List[str]:
     a = alias.strip().lower()
     base, _, size = a.partition(":")
 
-    if base not in _VIRTUAL and not size:
-        return [alias]  # unknown -> assume the caller named a real model
+    if base not in _VIRTUAL:
+        return [alias]  # unknown -> a concrete model id (possibly with a suffix like ":free")
 
     want = size or (base if base not in {"auto", "chat", "default"} else "")
     want = _SIZE_ALIASES.get(want, want)

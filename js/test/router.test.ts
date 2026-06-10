@@ -81,6 +81,21 @@ it("auth disables key then exhausts", async () => {
   expect(llm.providers[0].keys[0].disabled).toBe(true);
 });
 
+it("quota 402 disables the key and fails over", async () => {
+  mockFetch(async (url) =>
+    url.includes("openrouter")
+      ? new Response("Insufficient credits", { status: 402 })
+      : new Response(OK("from-google"), { status: 200 }),
+  );
+  const llm = new FreeLLM([new OpenRouter("broke", { discover: false }), new GoogleAIStudio("k2")], {
+    strategy: "priority",
+  });
+  const r = await llm.chat("hello");
+  expect(r.provider).toBe("google");
+  expect(llm.providers[0].keys[0].disabled).toBe(true);
+  expect(llm.providers[0].keys[0].lastError).toBe("quota:402");
+});
+
 it("bad request (400) raises immediately", async () => {
   mockFetch(async () => new Response("invalid temperature", { status: 400 }));
   const llm = new FreeLLM([new OpenRouter("k", { discover: false }), new GoogleAIStudio("k2")]);

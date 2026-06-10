@@ -3,6 +3,42 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.2.3] - 2026-06-10
+
+Applies to Python 0.2.3 and the JS/TS package 0.1.1 (the two track each other).
+
+### Fixed
+- **Model passthrough**: a concrete model id containing `:` that wasn't in the
+  provider's current list (e.g. a new OpenRouter `:free` id) silently resolved
+  to *all* chat models instead of the requested one. Unknown ids now pass
+  through verbatim, as documented.
+- **402 handling**: out-of-credit responses (e.g. OpenRouter below the free
+  threshold) aborted the whole call. Now classified as `QuotaExhausted`: the
+  key is disabled and the call fails over, like an auth error.
+- **OpenAI compat shim** is actually drop-in now: OpenAI-SDK constructor
+  arguments (`api_key`, `base_url`, ... / `{ apiKey, baseURL, ... }` in JS) are
+  accepted and ignored, and `stream=True` yields `chat.completion.chunk`-shaped
+  objects instead of being silently swallowed.
+- **Latency stats**: streaming successes recorded 0 ms and decayed the latency
+  EWMA toward zero, skewing the `latency` strategy. Streams now record
+  time-to-first-token, and zero-latency samples are ignored.
+- **OpenRouter 429 scope**: a bare "temporarily" in the body no longer marks a
+  429 as model-scoped — account-wide limits cool the key again.
+- **Discovery cache**: a cached `/models` list that filters down to zero usable
+  chat models no longer blocks the live refetch until TTL expiry.
+- **JS timeouts**: response-body reads and SSE streams are now covered by the
+  timeout (per-chunk inactivity, mirroring httpx); discovery fetches time out
+  after 15 s; an abandoned stream cancels the underlying connection.
+- Google fallback models refreshed (`gemini-2.5-flash` family; retired
+  `gemini-1.5-flash` dropped).
+
+### Changed
+- Version is single-sourced (`freelm._version` / `js/src/version.ts`, enforced
+  by a test in JS); the User-Agent strings derive from it.
+- CI lints with ruff; the PyPI release workflow runs tests before publishing.
+
+[0.2.3]: https://github.com/shihabshahrier/freelm/releases/tag/v0.2.3
+
 ## [0.2.2] - 2026-06-07
 
 ### Fixed

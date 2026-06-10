@@ -1,7 +1,7 @@
 """OpenAI-shaped response objects for the compat shim (attribute access + dict)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ._types import ChatResponse
@@ -81,3 +81,50 @@ def wrap_completion(resp: ChatResponse) -> CompatCompletion:
         choices=choices,
         usage=CompatUsage(u.prompt_tokens, u.completion_tokens, u.total_tokens),
     )
+
+
+# -- streaming (chat.completion.chunk) ------------------------------------
+
+
+@dataclass
+class CompatDelta:
+    content: Optional[str] = None
+    role: Optional[str] = None
+
+    def model_dump(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {}
+        if self.role is not None:
+            d["role"] = self.role
+        if self.content is not None:
+            d["content"] = self.content
+        return d
+
+
+@dataclass
+class CompatChunkChoice:
+    index: int
+    delta: CompatDelta
+    finish_reason: Optional[str] = None
+
+    def model_dump(self) -> Dict[str, Any]:
+        return {"index": self.index, "delta": self.delta.model_dump(), "finish_reason": self.finish_reason}
+
+
+@dataclass
+class CompatChunk:
+    choices: List[CompatChunkChoice]
+    id: Optional[str] = None
+    model: Optional[str] = None
+    object: str = "chat.completion.chunk"
+
+    def model_dump(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "object": self.object,
+            "model": self.model,
+            "choices": [c.model_dump() for c in self.choices],
+        }
+
+
+def wrap_chunk(content: str) -> CompatChunk:
+    return CompatChunk(choices=[CompatChunkChoice(index=0, delta=CompatDelta(content=content))])

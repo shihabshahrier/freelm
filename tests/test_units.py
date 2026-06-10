@@ -59,3 +59,24 @@ def test_registry_resolution():
     assert resolve_models(models, "fast") == ["small/model"]
     assert resolve_models(models, "small/model") == ["small/model"]   # exact id
     assert resolve_models(models, "vendor/unknown-xyz") == ["vendor/unknown-xyz"]  # passthrough
+
+
+def test_registry_passthrough_with_colon_suffix():
+    # ids like "vendor/model:free" that are NOT in the list must pass through
+    # verbatim — never silently fan out to the whole chat list.
+    models = [ModelSpec("big/model:free", ("chat", "large"))]
+    assert resolve_models(models, "moonshotai/kimi-k2:free") == ["moonshotai/kimi-k2:free"]
+    assert resolve_models(models, "big/model:free") == ["big/model:free"]  # exact still wins
+
+
+def test_apply_success_zero_latency_keeps_ewma():
+    from freelm._engine import apply_success
+    from freelm.strategy import Candidate
+
+    k = new_key_state("k", tier="free", rpm=None, rpd=None)
+    k.ewma_latency = 100.0
+    cand = Candidate(provider=None, key=k, model="m")
+    apply_success(cand, 0.0)            # "no sample" (e.g. empty stream)
+    assert k.ewma_latency == 100.0      # must not decay toward 0
+    apply_success(cand, 200.0)
+    assert k.ewma_latency == 100.0 * 0.7 + 200.0 * 0.3

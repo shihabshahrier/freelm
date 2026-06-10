@@ -23,10 +23,12 @@ class GoogleAIStudio(Provider):
         "tier1": {"rpm": 2000, "rpd": None},
     }
 
+    # Gemini 1.5 is retired for new projects; 2.5 flash family is the current
+    # free-tier workhorse, with 2.0 flash kept as a fallback (2026-06).
     DEFAULT_MODELS = [
-        ModelSpec("gemini-2.0-flash", ("chat", "fast", "large"), ctx=1000000),
-        ModelSpec("gemini-2.0-flash-lite", ("chat", "fast", "small"), ctx=1000000),
-        ModelSpec("gemini-1.5-flash", ("chat", "fast"), ctx=1000000),
+        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large"), ctx=1000000),
+        ModelSpec("gemini-2.5-flash-lite", ("chat", "fast", "small"), ctx=1000000),
+        ModelSpec("gemini-2.0-flash", ("chat", "fast"), ctx=1000000),
     ]
 
 

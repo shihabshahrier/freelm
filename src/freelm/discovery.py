@@ -123,8 +123,8 @@ def discover_sync(provider: Any, client: Optional[httpx.Client] = None) -> bool:
     """Populate ``provider.models`` from the live API (or cache). Returns success.
     On any failure the provider keeps its existing (hardcoded) models."""
     cached = _cache.load(provider.name)
-    if cached is not None:
-        return _apply(provider, cached)
+    if cached is not None and _apply(provider, cached):
+        return True  # a cached list that yields no usable specs falls through to a live fetch
 
     owns = client is None
     client = client or httpx.Client(timeout=15.0)
@@ -145,8 +145,8 @@ def discover_sync(provider: Any, client: Optional[httpx.Client] = None) -> bool:
 
 async def discover_async(provider: Any, client: httpx.AsyncClient) -> bool:
     cached = _cache.load(provider.name)
-    if cached is not None:
-        return _apply(provider, cached)
+    if cached is not None and _apply(provider, cached):
+        return True
     try:
         r = await client.get(provider.discovery_url(), headers=provider.headers(provider.keys[0].key))
         if r.status_code == 200:

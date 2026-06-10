@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { toSpecs } from "../src/discovery.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { save } from "../src/cache.js";
+import { discover, toSpecs } from "../src/discovery.js";
+import { OpenRouter } from "../src/providers/openrouter.js";
 
 describe("toSpecs", () => {
   it("detects reasoning by name and orders it last", () => {
@@ -40,5 +45,25 @@ describe("toSpecs", () => {
       true,
     ).map((s) => s.id);
     expect(ids).toEqual(["vendor/big-70b:free", "vendor/small-8b:free", "vendor/think-70b:free"]);
+  });
+});
+
+describe("discover", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.FREELM_CACHE_DIR;
+  });
+
+  it("refetches live when the cached list yields no usable specs", async () => {
+    process.env.FREELM_CACHE_DIR = mkdtempSync(join(tmpdir(), "freelm-test-"));
+    save("openrouter", [{ id: "whisper-large-v3" }]); // filters down to nothing
+    const live = { data: [{ id: "vendor/big-70b:free", context_length: 131072 }] };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(live), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const p = new OpenRouter("k");
+    expect(await discover(p)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // stale-empty cache did not block the live fetch
+    expect(p.models.map((m) => m.id)).toEqual(["vendor/big-70b:free"]);
   });
 });

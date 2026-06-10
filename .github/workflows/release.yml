@@ -4,6 +4,7 @@ name: Release
 # Set the repo secret PYPI_API_TOKEN (Settings -> Secrets -> Actions).
 # `skip-existing` makes re-runs idempotent — a version already on PyPI is skipped,
 # so the job stays green instead of failing on a duplicate.
+# Tests run first: a tagged-but-broken commit must not ship.
 
 on:
   release:
@@ -22,9 +23,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          ruff check src tests examples
+          pytest -q
       - name: Build
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --upgrade build
           python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

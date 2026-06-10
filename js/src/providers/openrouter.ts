@@ -25,7 +25,10 @@ export class OpenRouter extends Provider {
   }
 
   rateLimitScope(body: string): "key" | "model" {
+    // e.g. "<model> is temporarily rate-limited upstream". Deliberately narrow:
+    // a bare "temporarily" also appears in account-wide 429s, which must cool
+    // the key instead of hammering it with the next model.
     const b = (body || "").toLowerCase();
-    return b.includes("rate-limited upstream") || b.includes("temporarily") ? "model" : "key";
+    return b.includes("rate-limited upstream") ? "model" : "key";
   }
 }
