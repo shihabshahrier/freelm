@@ -76,6 +76,51 @@ const stream = await client.chat.completions.create({ model: "auto", messages, s
 for await (const chunk of stream) process.stdout.write(chunk.choices[0].delta.content ?? "");
 ```
 
+## Model & provider priority
+
+```ts
+// 1. ModelSpec priority — order a static list (lower = first)
+new OpenRouter("sk-or-...", { discover: false, models: [
+  modelSpec("meta-llama/llama-3.3-70b-instruct:free", ["chat", "large"], 131072, true, 0),
+  modelSpec("openai/gpt-oss-120b:free", ["chat", "large"], 131072, true, 1),
+]});
+
+// 2. prefer — bias *discovered* lists (exact id, else substring; survives refresh)
+new OpenRouter("sk-or-...", { prefer: ["qwen3", "gpt-oss"] });
+
+// 3. per-call ordered fallback chain (ids + aliases mix)
+await llm.chat(msgs, { model: ["llama-3.3-70b-versatile", "chat:fast"] });
+```
+
+Provider `priority` (lower = first) breaks ties in **every** strategy.
+
+## Free-only guard
+
+OpenRouter mixes paid and free models, so it ships with `freeOnly: true`: a
+non-`:free` model id throws `ConfigError` instead of silently billing you.
+Opt out: `new OpenRouter(key, { freeOnly: false })`. Other providers' free-tier
+accounts are free for every model.
+
+## Tool calling, observability, persistence, CLI
+
+```ts
+// tools / JSON output pass straight through
+const r = await llm.chat(msgs, { model: "chat:tools", tools, tool_choice: "auto" });
+r.toolCalls;
+
+// watch every attempt/failover/success (keys always masked)
+const llm = new FreeLLM(provs, { onEvent: (e) => console.log(e.kind, e.provider, e.model, e.status) });
+
+// carry quota/cooldowns/disabled keys across restarts (~/.cache/freelm/state.json)
+new FreeLLM(provs, { persist: true });   // or env FREELM_PERSIST=1
+```
+
+```bash
+npx freelm chat "explain failover in one line" --stream
+npx freelm models --provider openrouter
+npx freelm health
+```
+
 ## Environment variables
 
 | Provider | Key vars (first match wins) | Tier var |

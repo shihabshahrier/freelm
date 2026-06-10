@@ -16,7 +16,7 @@ Explicit config::
 """
 from __future__ import annotations
 
-from ._types import ChatRequest, ChatResponse, Choice, Message, Usage
+from ._types import ChatRequest, ChatResponse, Choice, Event, Message, Usage
 from .client import AsyncFreeLLM, FreeLLM
 from .config import providers_from_env
 from .discovery import list_free_models
@@ -52,6 +52,7 @@ __all__ = [
     "ChatResponse",
     "Choice",
     "Usage",
+    "Event",
     "providers_from_env",
     "list_free_models",
     "FreeLLMError",

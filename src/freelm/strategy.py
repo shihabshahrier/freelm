@@ -40,14 +40,17 @@ def order_candidates(
     """
     provs = list(providers)
 
+    # provider ``priority`` is the universal tiebreak: primary for PRIORITY,
+    # secondary for the dynamic strategies, baseline order for ROUND_ROBIN.
     if strategy == ROUND_ROBIN and provs:
+        provs.sort(key=lambda p: p.priority)
         i = rr.get("p", 0) % len(provs)
         provs = provs[i:] + provs[:i]
         rr["p"] = rr.get("p", 0) + 1
     elif strategy == QUOTA_AWARE:
-        provs.sort(key=lambda p: p.capacity(now), reverse=True)
+        provs.sort(key=lambda p: (-p.capacity(now), p.priority))
     elif strategy == LATENCY:
-        provs.sort(key=lambda p: p.avg_latency())
+        provs.sort(key=lambda p: (p.avg_latency(), p.priority))
     else:  # PRIORITY
         provs.sort(key=lambda p: p.priority)
 

@@ -69,6 +69,76 @@ def test_registry_passthrough_with_colon_suffix():
     assert resolve_models(models, "big/model:free") == ["big/model:free"]  # exact still wins
 
 
+def test_modelspec_priority_orders_resolution():
+    models = [
+        ModelSpec("late/model", ("chat", "large"), priority=5),
+        ModelSpec("early/model", ("chat", "large"), priority=0),
+        ModelSpec("middle/model", ("chat", "large"), priority=2),
+    ]
+    assert resolve_models(models, "auto") == ["early/model", "middle/model", "late/model"]
+    assert resolve_models(models, "large") == ["early/model", "middle/model", "late/model"]
+
+
+def test_tag_aliases_route_to_tagged_models():
+    models = [
+        ModelSpec("plain/model", ("chat",)),
+        ModelSpec("tooly/model", ("chat", "tools")),
+        ModelSpec("eyes/model", ("chat", "vision")),
+    ]
+    assert resolve_models(models, "chat:tools") == ["tooly/model"]
+    assert resolve_models(models, "vision") == ["eyes/model"]
+    assert resolve_models(models, "reasoning") == ["plain/model", "tooly/model", "eyes/model"]  # none tagged -> all chat
+
+
+def test_provider_prefer_reorders_resolved_models():
+    from freelm.providers.base import Provider
+
+    p = Provider(
+        "k",
+        name="x",
+        base_url="https://x.test/v1",
+        models=[
+            ModelSpec("a/first:free", ("chat",)),
+            ModelSpec("b/qwen3-80b:free", ("chat",)),
+            ModelSpec("c/last:free", ("chat",)),
+        ],
+        prefer=["c/last:free", "qwen3"],  # exact id, then substring
+    )
+    assert p.resolve_models("auto") == ["c/last:free", "b/qwen3-80b:free", "a/first:free"]
+    # explicit single-id passthrough is NOT reordered
+    assert p.resolve_models("b/qwen3-80b:free") == ["b/qwen3-80b:free"]
+
+
+def test_per_call_model_chain_resolves_in_order():
+    from freelm.providers.base import Provider
+
+    p = Provider(
+        "k",
+        name="x",
+        base_url="https://x.test/v1",
+        models=[
+            ModelSpec("big/model", ("chat", "large")),
+            ModelSpec("small/model", ("chat", "small", "fast")),
+        ],
+    )
+    assert p.resolve_models(["vendor/custom:free", "fast"]) == ["vendor/custom:free", "small/model"]
+    assert p.resolve_models(["fast", "auto"]) == ["small/model", "big/model"]  # deduped, order kept
+
+
+def test_provider_priority_breaks_ties_in_dynamic_strategies():
+    from freelm.providers.base import Provider
+    from freelm.strategy import order_candidates
+
+    def mk(name, prio):
+        return Provider("k", name=name, base_url="https://x.test/v1", priority=prio,
+                        models=[ModelSpec("m", ("chat",))])
+
+    second, first = mk("second", 1), mk("first", 0)
+    for strat in ("quota_aware", "latency", "round_robin"):
+        cands = order_candidates([second, first], "auto", 0.0, strat, {"p": 0})
+        assert cands[0].provider.name == "first", strat  # equal capacity/latency -> priority wins
+
+
 def test_apply_success_zero_latency_keeps_ewma():
     from freelm._engine import apply_success
     from freelm.strategy import Candidate

@@ -12,21 +12,25 @@ export interface Candidate {
 
 export function orderCandidates(
   providers: any[],
-  alias: string,
+  alias: string | string[],
   now: number,
   strategy: string,
   rr: { p: number },
 ): Candidate[] {
   let provs = [...providers];
 
+  // provider `priority` is the universal tiebreak: primary for priority,
+  // secondary for the dynamic strategies, baseline order for round_robin.
   if (strategy === "round_robin" && provs.length) {
+    provs.sort((a, b) => a.priority - b.priority);
     const i = (rr.p ?? 0) % provs.length;
     provs = [...provs.slice(i), ...provs.slice(0, i)];
     rr.p = (rr.p ?? 0) + 1;
   } else if (strategy === "quota_aware") {
-    provs.sort((a, b) => b.capacity(now) - a.capacity(now));
+    provs.sort((a, b) => b.capacity(now) - a.capacity(now) || a.priority - b.priority);
   } else if (strategy === "latency") {
-    provs.sort((a, b) => a.avgLatency() - b.avgLatency());
+    // Infinity - Infinity is NaN (falsy) -> the priority tiebreak kicks in
+    provs.sort((a, b) => a.avgLatency() - b.avgLatency() || a.priority - b.priority);
   } else {
     provs.sort((a, b) => a.priority - b.priority);
   }

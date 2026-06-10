@@ -25,11 +25,13 @@ def main() -> None:
         print("discovery skipped:", type(e).__name__, e)
 
     with FreeLLM(provs, strategy="quota_aware", timeout=20) as llm:
-        r = llm.chat("Reply with exactly one word: pong", max_tokens=10, temperature=0)
+        # thinking models (e.g. gemini-2.5-flash) can spend a tiny budget
+        # entirely on reasoning -> empty text, so give them headroom
+        r = llm.chat("Reply with exactly one word: pong", max_tokens=128, temperature=0)
         print(f"chat   -> {r.provider}/{r.model}: {r.text!r}")
 
         print("stream ->", end=" ", flush=True)
-        for chunk in llm.stream("Count to five.", max_tokens=30, temperature=0):
+        for chunk in llm.stream("Count to five.", max_tokens=128, temperature=0):
             print(chunk, end="", flush=True)
         print()
 
@@ -40,7 +42,7 @@ def main() -> None:
     async def _astream() -> None:
         async with AsyncFreeLLM(providers_from_env(), timeout=20) as llm:
             out = ""
-            async for chunk in llm.astream("Say hello.", max_tokens=10, temperature=0):
+            async for chunk in llm.astream("Say hello.", max_tokens=128, temperature=0):
                 out += chunk
             print("astream ->", repr(out))
 

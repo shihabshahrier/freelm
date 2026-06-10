@@ -18,6 +18,8 @@ export interface ProviderOptions {
   rpm?: number | null;
   rpd?: number | null;
   priority?: number;
+  prefer?: string[];
+  freeOnly?: boolean;
   name?: string;
   baseUrl?: string;
   extraHeaders?: Record<string, string>;
@@ -42,6 +44,8 @@ export class Provider {
   rpm: number | null;
   rpd: number | null;
   priority: number;
+  prefer: string[];
+  freeOnly: boolean;
   extraHeaders: Record<string, string>;
   discover: boolean;
   discoverFreeOnly: boolean;
@@ -65,6 +69,8 @@ export class Provider {
     this.rpm = opts.rpm !== undefined ? opts.rpm : tdef.rpm ?? 20;
     this.rpd = opts.rpd !== undefined ? opts.rpd : tdef.rpd ?? null;
     this.priority = opts.priority ?? 0;
+    this.prefer = [...(opts.prefer ?? [])];
+    this.freeOnly = opts.freeOnly ?? false;
     this.extraHeaders = { ...(opts.extraHeaders ?? {}) };
     this.discover = opts.discover ?? false;
     this.discoverFreeOnly = opts.discoverFreeOnly ?? false;
@@ -89,9 +95,54 @@ export class Provider {
     return { "Content-Type": "application/json", ...this.authHeaders(key), ...this.extraHeaders };
   }
 
-  resolveModels(alias: string): string[] {
-    return resolveModels(this.models, alias);
+  /** Resolve an alias — or an ordered list of aliases (per-call fallback
+   * chain) — to concrete model ids, applying `prefer` and the free guard. */
+  resolveModels(alias: string | string[]): string[] {
+    const aliases = Array.isArray(alias) ? alias : [alias];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const a of aliases) {
+      for (const mid of this.resolveOne(a)) {
+        if (!seen.has(mid)) {
+          seen.add(mid);
+          out.push(mid);
+        }
+      }
+    }
+    return out;
   }
+
+  private resolveOne(alias: string): string[] {
+    const ids = resolveModels(this.models, alias);
+    if (ids.length === 1 && ids[0] === alias) {
+      // exact id or passthrough — guard it, but don't reorder a direct ask
+      this.checkFree(alias);
+      return ids;
+    }
+    return this.applyPrefer(ids);
+  }
+
+  /** Move ids matching `prefer` patterns (exact id, else case-insensitive
+   * substring) to the front, in pattern order; the rest keep their order. */
+  private applyPrefer(ids: string[]): string[] {
+    if (!this.prefer.length) return ids;
+    const front: string[] = [];
+    const rest = [...ids];
+    for (const pat of this.prefer) {
+      const low = pat.toLowerCase();
+      let matches = rest.filter((i) => i === pat);
+      if (!matches.length) matches = rest.filter((i) => i.toLowerCase().includes(low));
+      for (const m of matches) {
+        rest.splice(rest.indexOf(m), 1);
+        front.push(m);
+      }
+    }
+    return [...front, ...rest];
+  }
+
+  /** Hook for providers whose catalog mixes paid and free models.
+   * Base: every model on the account's tier is free — nothing to check. */
+  protected checkFree(_modelId: string): void {}
 
   /** Is a 429 account/key-wide ("key") or just this model ("model")? */
   rateLimitScope(_body: string): "key" | "model" {

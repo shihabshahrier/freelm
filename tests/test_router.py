@@ -159,3 +159,75 @@ def test_health_report():
         h = llm.health()
     assert h[0]["provider"] == "openrouter"
     assert h[0]["breaker"] == "closed"
+
+
+def test_free_guard_blocks_paid_passthrough():
+    from freelm import ConfigError
+    import pytest as _pytest
+
+    llm = FreeLLM([OpenRouter("k", discover=False)])
+    with _pytest.raises(ConfigError, match="free_only=False"):
+        llm.chat("hi", model="openai/gpt-4o")
+    llm.close()
+
+
+@respx.mock
+def test_free_guard_opt_out_and_free_ids_pass():
+    respx.post(OR_URL).mock(return_value=httpx.Response(200, json=ok_payload("ok")))
+    # :free suffix always passes
+    with FreeLLM([OpenRouter("k", discover=False)]) as llm:
+        assert llm.chat("hi", model="meta-llama/llama-3.3-70b-instruct:free").text == "ok"
+    # free_only=False allows paid ids on the user's own account
+    with FreeLLM([OpenRouter("k", discover=False, free_only=False)]) as llm:
+        assert llm.chat("hi", model="openai/gpt-4o").text == "ok"
+
+
+@respx.mock
+def test_per_call_model_chain_fails_over_to_second_id():
+    route = respx.post(OR_URL).mock(
+        side_effect=[
+            httpx.Response(429, text="model X is temporarily rate-limited upstream"),
+            httpx.Response(200, json=ok_payload("via-second")),
+        ]
+    )
+    llm = FreeLLM([OpenRouter("k", discover=False)])
+    r = llm.chat("hi", model=["first/model:free", "second/model:free"])
+    assert r.text == "via-second"
+    assert route.call_count == 2
+    bodies = [c.request.read() for c in route.calls]
+    assert b'"first/model:free"' in bodies[0]
+    assert b'"second/model:free"' in bodies[1]
+    llm.close()
+
+
+@respx.mock
+def test_on_event_sees_failover_sequence_and_survives_bad_callback():
+    respx.post(OR_URL).mock(
+        side_effect=[httpx.Response(429), httpx.Response(200, json=ok_payload("done"))]
+    )
+    events = []
+
+    def hook(e):
+        events.append((e.kind, e.provider))
+        raise RuntimeError("callbacks must never break the call")
+
+    with FreeLLM([OpenRouter(["key-a", "key-b"], discover=False)], on_event=hook) as llm:
+        assert llm.chat("hi").text == "done"
+    kinds = [k for k, _ in events]
+    assert kinds == ["attempt", "error", "attempt", "success"]
+    assert all(p == "openrouter" for _, p in events)
+
+
+@respx.mock
+def test_tools_and_response_format_reach_request_body():
+    payload = ok_payload("calling")
+    payload["choices"][0]["message"]["tool_calls"] = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    ]
+    route = respx.post(OR_URL).mock(return_value=httpx.Response(200, json=payload))
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+    with FreeLLM([OpenRouter("k", discover=False)]) as llm:
+        r = llm.chat("weather?", tools=tools, tool_choice="auto", response_format={"type": "json_object"})
+    body = route.calls[0].request.read()
+    assert b'"tools"' in body and b'"tool_choice"' in body and b'"response_format"' in body
+    assert r.tool_calls and r.tool_calls[0]["function"]["name"] == "get_weather"

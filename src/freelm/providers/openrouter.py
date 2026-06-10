@@ -39,7 +39,23 @@ class OpenRouter(Provider):
         # Free models churn constantly -> discover live by default, free-only.
         kw.setdefault("discover", True)
         kw.setdefault("discover_free_only", True)
+        # OpenRouter's catalog mixes paid and free models -> guard paid ids.
+        kw.setdefault("free_only", True)
         super().__init__(keys, extra_headers=extra, **kw)
+
+    def _check_free(self, model_id: str) -> None:
+        if not self.free_only or model_id.endswith(":free"):
+            return
+        spec = next((m for m in self.models if m.id == model_id), None)
+        if spec is not None and spec.free:
+            return
+        from ..errors import ConfigError
+
+        raise ConfigError(
+            f"[openrouter] {model_id!r} is not a ':free' model. freelm is free-only "
+            "by default — pass OpenRouter(key, free_only=False) to allow paid ids "
+            "on your own account."
+        )
 
     def rate_limit_scope(self, body: str) -> str:
         b = (body or "").lower()

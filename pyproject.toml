@@ -43,6 +43,9 @@ dev = ["pytest>=7", "respx>=0.20", "anyio>=4", "ruff>=0.4"]
 Homepage = "https://github.com/shihabshahrier/freelm"
 Issues = "https://github.com/shihabshahrier/freelm/issues"
 
+[project.scripts]
+freelm = "freelm._cli:main"
+
 [tool.hatch.version]
 path = "src/freelm/_version.py"
 

@@ -33,6 +33,8 @@ class Provider:
         rpm: Optional[float] = None,
         rpd: Optional[int] = None,
         priority: int = 0,
+        prefer: Optional[Sequence[str]] = None,
+        free_only: bool = False,
         name: Optional[str] = None,
         base_url: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
@@ -56,6 +58,8 @@ class Provider:
         self.rpm = rpm if rpm is not None else tdef.get("rpm", 20)
         self.rpd = rpd if rpd is not None else tdef.get("rpd", None)
         self.priority = priority
+        self.prefer = list(prefer or [])
+        self.free_only = free_only
         self.extra_headers = dict(extra_headers or {})
         self.discover = discover
         self.discover_free_only = discover_free_only
@@ -84,8 +88,45 @@ class Provider:
         h.update(self.extra_headers)
         return h
 
-    def resolve_models(self, alias: str) -> List[str]:
-        return resolve_models(self.models, alias)
+    def resolve_models(self, alias: Union[str, Sequence[str]]) -> List[str]:
+        """Resolve an alias — or an ordered list of aliases (per-call fallback
+        chain) — to concrete model ids, applying ``prefer`` and the free guard."""
+        aliases = [alias] if isinstance(alias, str) else list(alias)
+        out: List[str] = []
+        seen = set()
+        for a in aliases:
+            for mid in self._resolve_one(a):
+                if mid not in seen:
+                    seen.add(mid)
+                    out.append(mid)
+        return out
+
+    def _resolve_one(self, alias: str) -> List[str]:
+        ids = resolve_models(self.models, alias)
+        if len(ids) == 1 and ids[0] == alias:
+            # exact id or passthrough — guard it, but don't reorder a direct ask
+            self._check_free(alias)
+            return ids
+        return self._apply_prefer(ids)
+
+    def _apply_prefer(self, ids: List[str]) -> List[str]:
+        """Move ids matching ``prefer`` patterns (exact id, else case-insensitive
+        substring) to the front, in pattern order; the rest keep their order."""
+        if not self.prefer:
+            return ids
+        front: List[str] = []
+        rest = list(ids)
+        for pat in self.prefer:
+            low = pat.lower()
+            matches = [i for i in rest if i == pat] or [i for i in rest if low in i.lower()]
+            for m in matches:
+                rest.remove(m)
+                front.append(m)
+        return front + rest
+
+    def _check_free(self, model_id: str) -> None:
+        """Hook for providers whose catalog mixes paid and free models.
+        Base: every model on the account's tier is free — nothing to check."""
 
     def rate_limit_scope(self, body: str) -> str:
         """Is a 429 account/key-wide (``"key"``) or just this model (``"model"``)?

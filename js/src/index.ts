@@ -7,7 +7,8 @@ export { listFreeModels, toSpecs, discover } from "./discovery.js";
 export { modelSpec, resolveModels } from "./registry.js";
 export type { ModelSpec } from "./registry.js";
 export { ChatResponse } from "./types.js";
-export type { Message, Choice, Usage, MessageLike, ChatRequest } from "./types.js";
+export type { Message, Choice, Usage, MessageLike, ChatRequest, FreeLLMEvent } from "./types.js";
+export { StateStore } from "./state.js";
 export {
   FreeLLMError,
   ConfigError,

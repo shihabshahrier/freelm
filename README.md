@@ -132,13 +132,40 @@ Names differ per provider, so ask by intent and `freelm` maps to a concrete mode
 
 | Alias | Meaning |
 |-------|---------|
-| `auto` / `chat` | any available chat model (registry order) |
+| `auto` / `chat` | any available chat model (priority, then registry order) |
 | `chat:large` / `large` | a larger/stronger model |
 | `chat:fast` / `fast` | a fast/cheap model |
 | `chat:small` / `small` | smallest model |
+| `chat:tools` / `tools` | models that support function calling |
+| `vision` / `reasoning` | models tagged with that capability |
 | `vendor/model-id` | passthrough — use exactly this model |
 
 Override the table per provider with `models=[ModelSpec(...)]`.
+
+## Model & provider priority
+
+Three ways to control *which model wins*, from static to per-call:
+
+```python
+from freelm import FreeLLM, OpenRouter, ModelSpec
+
+# 1. ModelSpec(priority=) — order a static list (lower = first)
+OpenRouter("sk-or-...", discover=False, models=[
+    ModelSpec("openai/gpt-oss-120b:free", ("chat", "large"), priority=1),
+    ModelSpec("meta-llama/llama-3.3-70b-instruct:free", ("chat", "large"), priority=0),
+])
+
+# 2. prefer=[...] — bias *discovered* lists without replacing them
+#    (exact id, else case-insensitive substring; survives refresh_models())
+OpenRouter("sk-or-...", prefer=["qwen/qwen3-next-80b-a3b-instruct:free", "gpt-oss"])
+
+# 3. per-call ordered fallback chain — ids and aliases mix freely
+llm.chat(msgs, model=["groq-only/llama-3.3-70b-versatile", "chat:fast"])
+```
+
+Provider `priority=` (lower = tried first) is now the universal tiebreak: primary
+for `strategy="priority"`, secondary for `quota_aware`/`latency` (equal headroom
+or latency → lower priority wins), and the baseline order for `round_robin`.
 
 ## Dynamic model discovery
 
@@ -178,6 +205,8 @@ Client knobs — `FreeLLM(...)` / `AsyncFreeLLM(...)`:
 | `timeout` | `60.0` | per-request timeout (s); also the overall deadline for one `chat()` |
 | `wait` | `False` | if every key is cooling, sleep until one frees instead of failing |
 | `max_wait` | `20.0` | longest single sleep (s) when `wait=True` |
+| `on_event` | `None` | observability callback — see below |
+| `persist` | `False` / `FREELM_PERSIST` | carry quota/cooldown/disabled state across restarts |
 | `http_client` | `None` | bring your own `httpx.Client` / `AsyncClient` |
 
 Provider knobs — `OpenRouter(...)`, `GoogleAIStudio(...)`, `NIM(...)`:
@@ -186,7 +215,9 @@ Provider knobs — `OpenRouter(...)`, `GoogleAIStudio(...)`, `NIM(...)`:
 |-------|---------|--------------|
 | `keys` | — | one key (str) or many (list, or comma-string via env) |
 | `tier` | `"free"` | selects built-in rpm/rpd limits |
-| `priority` | `0` | **lower = tried first** (with `strategy="priority"`) |
+| `priority` | `0` | **lower = tried first** (tiebreak in every strategy) |
+| `prefer` | `[]` | model ids/substrings to move to the front of resolution |
+| `free_only` | OpenRouter `True`, else `False` | block paid model ids (see below) |
 | `rpm` / `rpd` | tier default | override requests-per-minute / per-day |
 | `models` | discovered / built-in | override model list (order = preference) |
 | `discover` | OpenRouter `True`, else `False` | live-fetch `/models` |
@@ -227,6 +258,79 @@ OpenRouter("sk-or-...", discover=False, models=[
     ModelSpec("openai/gpt-oss-120b:free", ("chat", "large")),
     ModelSpec("meta-llama/llama-3.3-70b-instruct:free", ("chat", "large")),
 ])
+```
+
+## When can freelm cost money?
+
+freelm is free-only **by default and by guard**, not just by convention:
+
+- **OpenRouter** mixes paid and free models in one catalog, so it ships with
+  `free_only=True`: passing a non-`:free` model id raises `ConfigError` instead
+  of silently billing you. Opt out per provider: `OpenRouter(key, free_only=False)`.
+- **Google AI Studio** is free unless *you* pick `tier="tier1"` (billing enabled).
+- **NVIDIA NIM** burns build.nvidia.com credits — free until they run out (requests then fail, not bill).
+- **Groq / Cerebras / Mistral** free-tier accounts: every model is free at that tier.
+
+## Tool calling & JSON output
+
+`tools`, `tool_choice`, and `response_format` pass straight through to the
+provider; `chat:tools` routes to models that support function calling:
+
+```python
+r = llm.chat(msgs, model="chat:tools", tools=[...], tool_choice="auto")
+r.tool_calls                 # [{"id": ..., "function": {...}}] or None
+
+llm.chat(msgs, response_format={"type": "json_object"})
+```
+
+(Tool calls are non-streaming for now; `stream()` yields text deltas only.)
+
+> **Thinking-model gotcha:** reasoning models (gemini-2.5-flash, gpt-oss, ...)
+> can spend a small `max_tokens` budget entirely on hidden reasoning and return
+> *empty* text with `finish_reason="length"`. Give them headroom (≥128) or pick
+> a non-thinking model — `auto` already deprioritizes `reasoning`-tagged models.
+
+## Observability
+
+Watch every attempt, failover, and success without wrapping the client:
+
+```python
+def hook(e):  # freelm.Event
+    print(e.kind, e.provider, e.model, e.status, e.latency_ms)
+
+llm = freelm.FreeLLM.from_env(on_event=hook)
+# attempt openrouter openai/gpt-oss-20b:free None None
+# error   openrouter openai/gpt-oss-20b:free 429 None
+# attempt google gemini-2.5-flash None None
+# success google gemini-2.5-flash None 412.3
+```
+
+`kind` is `attempt | success | error | wait | discovery`; keys are always
+masked. A raising callback never breaks the call. `llm.health()` still gives
+point-in-time state.
+
+## Persistent quota state
+
+By default counters live in memory, so a restarted process re-burns exhausted
+keys. Opt in to disk persistence (shared schema with the JS package):
+
+```python
+llm = freelm.FreeLLM.from_env(persist=True)   # or env FREELM_PERSIST=1
+```
+
+State (`rpd_used`, cooldowns, disabled keys — never raw keys, only hashes)
+lives in `~/.cache/freelm/state.json` (0600), loaded at construction and saved
+after each call. Multi-process is last-writer-wins, best effort.
+
+## CLI
+
+The package installs a `freelm` command (`pipx install freelm`, or `npx freelm`
+for the JS package):
+
+```bash
+freelm chat "explain failover in one line" --model chat:fast --stream
+freelm models --provider openrouter     # live free-model list
+freelm health                           # per-key readiness/quota table
 ```
 
 ## Errors
@@ -278,10 +382,12 @@ for row in llm.health():
 
 ## Roadmap
 
-Shipped: streaming (0.2.0), JS/TS port (npm `freelm`).
+Shipped: streaming (0.2.0), JS/TS port (npm `freelm`), model/provider priority +
+free-only guard + tool-calling passthrough + observability + CLI + persistent
+quota state (0.3.0).
 
-- next — persistent quota tracking (sqlite/json) + tighter tier pacing
-- then — tool / function-calling normalization
+- next — token-based pacing (TPM/TPD budgets from response usage)
+- then — streaming tool calls; deeper structured-output normalization
 - later — embeddings, vision; Go port
 
 ## How freelm compares

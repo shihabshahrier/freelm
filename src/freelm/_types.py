@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 
 @dataclass
@@ -81,8 +81,33 @@ class ChatResponse:
             return ""
         return self.choices[0].message.content or ""
 
+    @property
+    def tool_calls(self) -> Optional[List[Dict[str, Any]]]:
+        """Tool calls of the first choice, if the model requested any."""
+        if not self.choices:
+            return None
+        return self.choices[0].message.tool_calls
+
     def __str__(self) -> str:  # so print(resp) gives the text
         return self.text
+
+
+@dataclass
+class Event:
+    """One observability event emitted via ``FreeLLM(on_event=...)``.
+
+    ``kind`` is ``"attempt" | "success" | "error" | "wait" | "discovery"``.
+    ``key`` is always masked — never a raw API key.
+    """
+
+    kind: str
+    provider: Optional[str] = None
+    key: Optional[str] = None
+    model: Optional[str] = None
+    status: Optional[int] = None
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
+    attempt: int = 0
 
 
 _SAMPLING_FIELDS = ("temperature", "max_tokens", "top_p", "stop", "seed", "frequency_penalty", "presence_penalty")
@@ -91,7 +116,7 @@ _SAMPLING_FIELDS = ("temperature", "max_tokens", "top_p", "stop", "seed", "frequ
 @dataclass
 class ChatRequest:
     messages: List[Dict[str, Any]]
-    model: str = "auto"          # virtual alias resolved per provider
+    model: Union[str, Tuple[str, ...]] = "auto"   # alias, or ordered fallback chain
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     top_p: Optional[float] = None
@@ -111,9 +136,10 @@ class ChatRequest:
         return body
 
 
-def build_request(messages: Any, model: str, kw: Dict[str, Any]) -> ChatRequest:
+def build_request(messages: Any, model: Union[str, Sequence[str]], kw: Dict[str, Any]) -> ChatRequest:
     if not isinstance(messages, (list, tuple)):
         messages = [messages]
     msgs = [Message.from_any(m).to_dict() for m in messages]
     fields = {k: kw.pop(k) for k in list(kw) if k in _SAMPLING_FIELDS}
-    return ChatRequest(messages=msgs, model=model, extra=dict(kw), **fields)
+    m = model if isinstance(model, str) else tuple(model)
+    return ChatRequest(messages=msgs, model=m, extra=dict(kw), **fields)

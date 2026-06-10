@@ -25,9 +25,12 @@ class GoogleAIStudio(Provider):
 
     # Gemini 1.5 is retired for new projects; 2.5 flash family is the current
     # free-tier workhorse, with 2.0 flash kept as a fallback (2026-06).
+    # 2.5-flash *thinks by default* and can spend a small max_tokens budget
+    # entirely on reasoning (empty text, finish_reason=length) — so the
+    # non-thinking lite leads for `auto`, and flash is tagged "reasoning".
     DEFAULT_MODELS = [
-        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large"), ctx=1000000),
         ModelSpec("gemini-2.5-flash-lite", ("chat", "fast", "small"), ctx=1000000),
+        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large", "reasoning"), ctx=1000000),
         ModelSpec("gemini-2.0-flash", ("chat", "fast"), ctx=1000000),
     ]
 

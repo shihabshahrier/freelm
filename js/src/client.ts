@@ -4,9 +4,10 @@ import * as engine from "./engine.js";
 import { ConfigError, NoProvidersAvailable, ProviderError, RateLimited, Transient, classify } from "./errors.js";
 import { Provider } from "./providers/base.js";
 import { providersFromEnv } from "./config.js";
+import { StateStore } from "./state.js";
 import { Candidate, STRATEGIES, Strategy } from "./strategy.js";
 import { nowS, sleep } from "./time.js";
-import { buildPayload, buildRequest, ChatRequest, ChatResponse, MessageLike } from "./types.js";
+import { buildPayload, buildRequest, ChatRequest, ChatResponse, FreeLLMEvent, MessageLike } from "./types.js";
 import { VERSION } from "./version.js";
 
 const UA = `freelm-js/${VERSION}`;
@@ -17,9 +18,13 @@ export interface FreeLLMOptions {
   timeout?: number; // seconds; also the overall per-call deadline
   wait?: boolean;
   maxWait?: number;
+  onEvent?: (e: FreeLLMEvent) => void;
+  /** Persist rpd counters / cooldowns / disabled keys across restarts
+   * (~/.cache/freelm/state.json). Defaults to the FREELM_PERSIST env var. */
+  persist?: boolean;
 }
 
-export type ChatOptions = { model?: string } & Record<string, any>;
+export type ChatOptions = { model?: string | string[] } & Record<string, any>;
 
 function headersObj(res: Response): Record<string, string> {
   const o: Record<string, string> = {};
@@ -48,6 +53,8 @@ export class FreeLLM {
   maxWait: number;
   private rr = { p: 0 };
   private discoveryDone = false;
+  private onEvent?: (e: FreeLLMEvent) => void;
+  private state: StateStore | null = null;
 
   constructor(providers: Provider[], opts: FreeLLMOptions = {}) {
     if (!providers.length) throw new ConfigError("FreeLLM needs at least one provider");
@@ -60,6 +67,37 @@ export class FreeLLM {
     this.timeout = opts.timeout ?? 60;
     this.wait = opts.wait ?? false;
     this.maxWait = opts.maxWait ?? 20;
+    this.onEvent = opts.onEvent;
+    const persist = opts.persist ?? ["1", "true", "yes"].includes((process.env.FREELM_PERSIST ?? "").toLowerCase());
+    if (persist) {
+      this.state = new StateStore();
+      this.state.loadInto(this.providers, nowS());
+    }
+  }
+
+  private emit(
+    kind: FreeLLMEvent["kind"],
+    extra: { cand?: Candidate; provider?: string; status?: number; latencyMs?: number; error?: string; attempt?: number } = {},
+  ): void {
+    if (!this.onEvent) return;
+    try {
+      this.onEvent({
+        kind,
+        provider: extra.cand?.provider.name ?? extra.provider ?? null,
+        key: extra.cand?.key.masked() ?? null,
+        model: extra.cand?.model ?? null,
+        status: extra.status ?? null,
+        latencyMs: extra.latencyMs ?? null,
+        error: extra.error ?? null,
+        attempt: extra.attempt ?? 0,
+      });
+    } catch {
+      // a misbehaving callback must never break the call
+    }
+  }
+
+  private saveState(): void {
+    this.state?.save(this.providers, nowS());
   }
 
   static fromEnv(opts: FreeLLMOptions = {}): FreeLLM {
@@ -97,7 +135,7 @@ export class FreeLLM {
       this.providers.map(async (p) => {
         if (p.discover) {
           try {
-            await discover(p);
+            if (await discover(p)) this.emit("discovery", { provider: p.name });
           } catch {
             /* keep fallback models */
           }
@@ -140,6 +178,7 @@ export class FreeLLM {
       if (!cand) {
         const w = engine.soonestWait(this.providers, now);
         if (this.wait && w !== null && w <= this.maxWait && (deadline === null || now + w < deadline)) {
+          this.emit("wait", { latencyMs: w * 1000, attempt: attempts.length });
           await sleep((Math.min(w, this.maxWait) + 0.01) * 1000);
           tried = engine.forgetRecovered(this.providers, tried, nowS());
           continue;
@@ -150,14 +189,19 @@ export class FreeLLM {
       tried.add(engine.triedKey(cand));
       if (!cand.key.reserve(now)) continue;
 
+      this.emit("attempt", { cand, attempt: attempts.length + 1 });
       try {
         const resp = await this.doRequest(cand, req);
         engine.applySuccess(cand, resp.latencyMs);
+        this.emit("success", { cand, latencyMs: resp.latencyMs, attempt: attempts.length + 1 });
+        this.saveState();
         return resp;
       } catch (e) {
         if (e instanceof ProviderError) {
           engine.applyError(cand, e, nowS());
           attempts.push([cand, e]);
+          this.emit("error", { cand, status: e.status, error: String(e.message), attempt: attempts.length });
+          this.saveState();
           if (engine.shouldRaise(e)) throw e;
           continue;
         }
@@ -223,6 +267,7 @@ export class FreeLLM {
       if (!cand) {
         const w = engine.soonestWait(this.providers, now);
         if (this.wait && w !== null && w <= this.maxWait && (deadline === null || now + w < deadline)) {
+          this.emit("wait", { latencyMs: w * 1000, attempt: attempts.length });
           await sleep((Math.min(w, this.maxWait) + 0.01) * 1000);
           tried = engine.forgetRecovered(this.providers, tried, nowS());
           continue;
@@ -236,6 +281,7 @@ export class FreeLLM {
       let produced = false;
       let firstMs = 0; // time-to-first-token; feeds the latency EWMA
       const t0 = nowS();
+      this.emit("attempt", { cand, attempt: attempts.length + 1 });
       try {
         for await (const chunk of this.streamRequest(cand, req)) {
           if (!produced) firstMs = (nowS() - t0) * 1000;
@@ -246,12 +292,16 @@ export class FreeLLM {
         if (e instanceof ProviderError) {
           engine.applyError(cand, e, nowS());
           attempts.push([cand, e]);
+          this.emit("error", { cand, status: e.status, error: String(e.message), attempt: attempts.length });
+          this.saveState();
           if (produced || engine.shouldRaise(e)) throw e;
           continue;
         }
         throw e;
       }
       engine.applySuccess(cand, firstMs);
+      this.emit("success", { cand, latencyMs: firstMs, attempt: attempts.length + 1 });
+      this.saveState();
       return;
     }
     throw new NoProvidersAvailable(attempts);

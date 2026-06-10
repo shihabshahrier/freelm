@@ -3,6 +3,36 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-06-10
+
+Applies to Python 0.3.0 and the JS/TS package 0.2.0 (the two track each other).
+
+### Added
+- **Model priority, three ways**: `ModelSpec(priority=)` for static lists;
+  provider `prefer=[...]` (exact id or substring) to bias *discovered* lists
+  without replacing them; per-call ordered fallback chains
+  (`chat(msgs, model=["vendor/id", "chat:fast"])`).
+- **Provider priority everywhere**: `priority=` is now the tiebreak in
+  `quota_aware` and `latency` and the baseline order for `round_robin`.
+- **Free-only guard**: OpenRouter ships `free_only=True` — passing a paid
+  (non-`:free`) model id raises `ConfigError` with the opt-out
+  (`free_only=False`) instead of silently billing. New README section
+  "When can freelm cost money?".
+- **Capability aliases**: `chat:tools`, `vision`, `reasoning` route to models
+  tagged by discovery; `tools`/`tool_choice`/`response_format` pass through and
+  `ChatResponse.tool_calls` (JS: `toolCalls`) surfaces function calls.
+- **Observability**: `FreeLLM(on_event=...)` / `{ onEvent }` emits
+  `attempt | success | error | wait | discovery` events with masked keys;
+  a raising callback never breaks the call.
+- **Persistent quota state** (opt-in `persist=True` / `FREELM_PERSIST=1`):
+  rpd counters, cooldowns, and disabled keys survive restarts via
+  `~/.cache/freelm/state.json` (0600, atomic, key *hashes* only — schema shared
+  between the Python and JS packages).
+- **CLI**: `freelm chat|models|health` (Python entry point; `npx freelm` in JS).
+  Zero new dependencies in both languages.
+
+[0.3.0]: https://github.com/shihabshahrier/freelm/releases/tag/v0.3.0
+
 ## [0.2.3] - 2026-06-10
 
 Applies to Python 0.2.3 and the JS/TS package 0.1.1 (the two track each other).

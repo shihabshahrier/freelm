@@ -1,3 +1,4 @@
+import { ConfigError } from "../errors.js";
 import { modelSpec, ModelSpec } from "../registry.js";
 import { Provider, ProviderOptions, TierLimit } from "./base.js";
 
@@ -21,7 +22,18 @@ export class OpenRouter extends Provider {
 
   constructor(keys: string | string[], opts: ProviderOptions = {}) {
     const extraHeaders = { "X-Title": "freelm", ...(opts.extraHeaders ?? {}) };
-    super(keys, { discover: true, discoverFreeOnly: true, ...opts, extraHeaders });
+    // OpenRouter's catalog mixes paid and free models -> guard paid ids by default.
+    super(keys, { discover: true, discoverFreeOnly: true, freeOnly: true, ...opts, extraHeaders });
+  }
+
+  protected checkFree(modelId: string): void {
+    if (!this.freeOnly || modelId.endsWith(":free")) return;
+    const spec = this.models.find((m) => m.id === modelId);
+    if (spec && spec.free) return;
+    throw new ConfigError(
+      `[openrouter] '${modelId}' is not a ':free' model. freelm is free-only by default — ` +
+        "pass new OpenRouter(key, { freeOnly: false }) to allow paid ids on your own account.",
+    );
   }
 
   rateLimitScope(body: string): "key" | "model" {

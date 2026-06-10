@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 import json
+import os
 import time
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 import httpx
 
 from . import _engine as engine
 from . import discovery
-from ._types import ChatResponse, build_request
+from ._state import StateStore
+from ._types import ChatResponse, Event, build_request
 from ._version import __version__
 from .errors import ConfigError, NoProvidersAvailable, ProviderError, Transient
 from .providers.base import Provider
 from .strategy import Candidate, STRATEGIES
 
 _DEFAULT_UA = f"freelm/{__version__}"
+
+ModelArg = Union[str, Sequence[str]]
 
 
 def _sse_delta(line: str) -> Optional[str]:
@@ -42,6 +46,8 @@ class _BaseClient:
         timeout: float = 60.0,
         wait: bool = False,
         max_wait: float = 20.0,
+        on_event: Optional[Callable[[Event], Any]] = None,
+        persist: Optional[bool] = None,
     ) -> None:
         providers = list(providers)
         if not providers:
@@ -56,6 +62,46 @@ class _BaseClient:
         self.max_wait = max_wait
         self._rr: Dict[str, int] = {"p": 0}
         self._discovery_done = False
+        self._on_event = on_event
+        if persist is None:
+            persist = os.getenv("FREELM_PERSIST", "").lower() in ("1", "true", "yes")
+        self._state: Optional[StateStore] = StateStore() if persist else None
+        if self._state is not None:
+            self._state.load_into(self.providers, time.monotonic())
+
+    # -- observability / persistence --------------------------------------
+    def _emit(
+        self,
+        kind: str,
+        *,
+        cand: Optional[Candidate] = None,
+        provider: Optional[str] = None,
+        status: Optional[int] = None,
+        latency_ms: Optional[float] = None,
+        error: Optional[str] = None,
+        attempt: int = 0,
+    ) -> None:
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(
+                Event(
+                    kind=kind,
+                    provider=cand.provider.name if cand else provider,
+                    key=cand.key.masked() if cand else None,
+                    model=cand.model if cand else None,
+                    status=status,
+                    latency_ms=latency_ms,
+                    error=error,
+                    attempt=attempt,
+                )
+            )
+        except Exception:
+            pass  # a misbehaving callback must never break the call
+
+    def _save_state(self) -> None:
+        if self._state is not None:
+            self._state.save(self.providers, time.monotonic())
 
     # -- introspection ---------------------------------------------------
     def health(self) -> List[Dict[str, Any]]:
@@ -100,7 +146,8 @@ class FreeLLM(_BaseClient):
         for p in self.providers:
             if getattr(p, "discover", False):
                 try:
-                    discovery.discover_sync(p, self._client)
+                    if discovery.discover_sync(p, self._client):
+                        self._emit("discovery", provider=p.name)
                 except Exception:
                     pass  # keep hardcoded fallback models
         self._discovery_done = True
@@ -111,7 +158,7 @@ class FreeLLM(_BaseClient):
         for p in self.providers:
             p._discovered = False
 
-    def chat(self, messages: Any, model: str = "auto", **kw: Any) -> ChatResponse:
+    def chat(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> ChatResponse:
         self._ensure_discovered()
         req = build_request(messages, model, kw)
         deadline = time.monotonic() + self.timeout if self.timeout else None
@@ -126,6 +173,7 @@ class FreeLLM(_BaseClient):
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
                     time.sleep(min(w, self.max_wait) + 0.01)
                     tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
@@ -135,23 +183,28 @@ class FreeLLM(_BaseClient):
             if not cand.key.reserve(now):
                 continue  # lost an rpm token to a concurrent caller; pick another
 
+            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
             try:
                 resp = self._do(cand, req)
             except ProviderError as exc:
                 engine.apply_error(cand, exc, time.monotonic())
                 attempts.append((cand, exc))
+                self._emit("error", cand=cand, status=exc.status, error=str(exc), attempt=len(attempts))
+                self._save_state()
                 if engine.should_raise(exc):
                     raise
                 continue
             engine.apply_success(cand, resp.latency_ms)
+            self._emit("success", cand=cand, latency_ms=resp.latency_ms, attempt=len(attempts) + 1)
+            self._save_state()
             return resp
 
         raise NoProvidersAvailable(attempts)
 
-    def text(self, messages: Any, model: str = "auto", **kw: Any) -> str:
+    def text(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> str:
         return self.chat(messages, model=model, **kw).text
 
-    def stream(self, messages: Any, model: str = "auto", **kw: Any) -> Iterator[str]:
+    def stream(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> Iterator[str]:
         """Yield content deltas as they arrive. Fails over between providers
         *before* the first token; once tokens start flowing it stays on that
         provider (no mid-stream failover)."""
@@ -169,6 +222,7 @@ class FreeLLM(_BaseClient):
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
                     time.sleep(min(w, self.max_wait) + 0.01)
                     tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
@@ -181,6 +235,7 @@ class FreeLLM(_BaseClient):
             produced = False
             first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
             t0 = time.monotonic()
+            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
             try:
                 for chunk in self._stream_do(cand, req):
                     if not produced:
@@ -190,10 +245,14 @@ class FreeLLM(_BaseClient):
             except ProviderError as exc:
                 engine.apply_error(cand, exc, time.monotonic())
                 attempts.append((cand, exc))
+                self._emit("error", cand=cand, status=exc.status, error=str(exc), attempt=len(attempts))
+                self._save_state()
                 if produced or engine.should_raise(exc):
                     raise
                 continue
             engine.apply_success(cand, first_ms)
+            self._emit("success", cand=cand, latency_ms=first_ms, attempt=len(attempts) + 1)
+            self._save_state()
             return
 
         raise NoProvidersAvailable(attempts)
@@ -243,6 +302,7 @@ class FreeLLM(_BaseClient):
 
     # -- lifecycle -------------------------------------------------------
     def close(self) -> None:
+        self._save_state()
         if self._owns_client:
             self._client.close()
 
@@ -279,7 +339,8 @@ class AsyncFreeLLM(_BaseClient):
         for p in self.providers:
             if getattr(p, "discover", False):
                 try:
-                    await discovery.discover_async(p, client)
+                    if await discovery.discover_async(p, client):
+                        self._emit("discovery", provider=p.name)
                 except Exception:
                     pass  # keep hardcoded fallback models
         self._discovery_done = True
@@ -289,7 +350,7 @@ class AsyncFreeLLM(_BaseClient):
         for p in self.providers:
             p._discovered = False
 
-    async def chat(self, messages: Any, model: str = "auto", **kw: Any) -> ChatResponse:
+    async def chat(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> ChatResponse:
         import asyncio
 
         await self._ensure_discovered()
@@ -306,6 +367,7 @@ class AsyncFreeLLM(_BaseClient):
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
                     await asyncio.sleep(min(w, self.max_wait) + 0.01)
                     tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
@@ -315,23 +377,28 @@ class AsyncFreeLLM(_BaseClient):
             if not cand.key.reserve(now):
                 continue
 
+            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
             try:
                 resp = await self._ado(cand, req)
             except ProviderError as exc:
                 engine.apply_error(cand, exc, time.monotonic())
                 attempts.append((cand, exc))
+                self._emit("error", cand=cand, status=exc.status, error=str(exc), attempt=len(attempts))
+                self._save_state()
                 if engine.should_raise(exc):
                     raise
                 continue
             engine.apply_success(cand, resp.latency_ms)
+            self._emit("success", cand=cand, latency_ms=resp.latency_ms, attempt=len(attempts) + 1)
+            self._save_state()
             return resp
 
         raise NoProvidersAvailable(attempts)
 
-    async def text(self, messages: Any, model: str = "auto", **kw: Any) -> str:
+    async def text(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> str:
         return (await self.chat(messages, model=model, **kw)).text
 
-    async def astream(self, messages: Any, model: str = "auto", **kw: Any) -> AsyncIterator[str]:
+    async def astream(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> AsyncIterator[str]:
         """Async content-delta stream. Fails over before the first token only."""
         import asyncio
 
@@ -349,6 +416,7 @@ class AsyncFreeLLM(_BaseClient):
             if cand is None:
                 w = engine.soonest_wait(self.providers, now)
                 if self.wait and w is not None and w <= self.max_wait and (deadline is None or now + w < deadline):
+                    self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
                     await asyncio.sleep(min(w, self.max_wait) + 0.01)
                     tried = engine.forget_recovered(self.providers, tried, time.monotonic())
                     continue
@@ -361,6 +429,7 @@ class AsyncFreeLLM(_BaseClient):
             produced = False
             first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
             t0 = time.monotonic()
+            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
             try:
                 async for chunk in self._astream_do(cand, req):
                     if not produced:
@@ -370,10 +439,14 @@ class AsyncFreeLLM(_BaseClient):
             except ProviderError as exc:
                 engine.apply_error(cand, exc, time.monotonic())
                 attempts.append((cand, exc))
+                self._emit("error", cand=cand, status=exc.status, error=str(exc), attempt=len(attempts))
+                self._save_state()
                 if produced or engine.should_raise(exc):
                     raise
                 continue
             engine.apply_success(cand, first_ms)
+            self._emit("success", cand=cand, latency_ms=first_ms, attempt=len(attempts) + 1)
+            self._save_state()
             return
 
         raise NoProvidersAvailable(attempts)
@@ -424,6 +497,7 @@ class AsyncFreeLLM(_BaseClient):
         raise err
 
     async def aclose(self) -> None:
+        self._save_state()
         if self._owns_client and self._client is not None:
             await self._client.aclose()
 

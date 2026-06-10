@@ -61,6 +61,66 @@ describe("resolveModels", () => {
     expect(resolveModels(models, "moonshotai/kimi-k2:free")).toEqual(["moonshotai/kimi-k2:free"]);
     expect(resolveModels(models, "big/model:free")).toEqual(["big/model:free"]); // exact still wins
   });
+
+  it("orders by ModelSpec priority", () => {
+    const models = [
+      modelSpec("late/model", ["chat", "large"], 0, true, 5),
+      modelSpec("early/model", ["chat", "large"], 0, true, 0),
+      modelSpec("middle/model", ["chat", "large"], 0, true, 2),
+    ];
+    expect(resolveModels(models, "auto")).toEqual(["early/model", "middle/model", "late/model"]);
+  });
+
+  it("routes tag aliases (tools/vision) to tagged models", () => {
+    const models = [
+      modelSpec("plain/model", ["chat"]),
+      modelSpec("tooly/model", ["chat", "tools"]),
+      modelSpec("eyes/model", ["chat", "vision"]),
+    ];
+    expect(resolveModels(models, "chat:tools")).toEqual(["tooly/model"]);
+    expect(resolveModels(models, "vision")).toEqual(["eyes/model"]);
+    expect(resolveModels(models, "reasoning")).toEqual(["plain/model", "tooly/model", "eyes/model"]); // none tagged -> all chat
+  });
+});
+
+describe("Provider resolveModels", () => {
+  it("prefer= reorders resolved models but not direct asks", async () => {
+    const { Provider } = await import("../src/providers/base.js");
+    const p = new Provider("k", {
+      name: "x",
+      baseUrl: "https://x.test/v1",
+      models: [
+        modelSpec("a/first:free", ["chat"]),
+        modelSpec("b/qwen3-80b:free", ["chat"]),
+        modelSpec("c/last:free", ["chat"]),
+      ],
+      prefer: ["c/last:free", "qwen3"], // exact id, then substring
+    });
+    expect(p.resolveModels("auto")).toEqual(["c/last:free", "b/qwen3-80b:free", "a/first:free"]);
+    expect(p.resolveModels("b/qwen3-80b:free")).toEqual(["b/qwen3-80b:free"]); // direct ask not reordered
+  });
+
+  it("resolves per-call chains in order, deduped", async () => {
+    const { Provider } = await import("../src/providers/base.js");
+    const p = new Provider("k", {
+      name: "x",
+      baseUrl: "https://x.test/v1",
+      models: [modelSpec("big/model", ["chat", "large"]), modelSpec("small/model", ["chat", "small", "fast"])],
+    });
+    expect(p.resolveModels(["vendor/custom:free", "fast"])).toEqual(["vendor/custom:free", "small/model"]);
+    expect(p.resolveModels(["fast", "auto"])).toEqual(["small/model", "big/model"]);
+  });
+
+  it("provider priority breaks ties in dynamic strategies", async () => {
+    const { Provider } = await import("../src/providers/base.js");
+    const { orderCandidates } = await import("../src/strategy.js");
+    const mk = (name: string, prio: number) =>
+      new Provider("k", { name, baseUrl: "https://x.test/v1", priority: prio, models: [modelSpec("m", ["chat"])] });
+    for (const strat of ["quota_aware", "latency", "round_robin"]) {
+      const cands = orderCandidates([mk("second", 1), mk("first", 0)], "auto", 0, strat, { p: 0 });
+      expect(cands[0].provider.name, strat).toBe("first");
+    }
+  });
 });
 
 describe("applySuccess", () => {

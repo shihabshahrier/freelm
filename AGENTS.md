@@ -28,6 +28,8 @@ same commit, with tests in both.** File mapping is 1:1:
 | `config.py`             | `config.ts`            |
 | `providers/*.py`        | `providers/*.ts`       |
 | `compat/openai.py` + `types_compat.py` | `compat/openai.ts` |
+| `_state.py`             | `state.ts`             |
+| `_cli.py` + `__main__.py` | `cli.ts` (+ `bin/freelm.mjs`) |
 | `_version.py`           | `version.ts`           |
 
 ## Commands
@@ -66,10 +68,24 @@ Live smoke test (needs real keys in env, never hardcoded):
   "model" `ModelNotFound` → refund the daily slot, next model; any other 4xx
   → caller bug, raise immediately. Exhaustion raises `NoProvidersAvailable`
   with the attempt list.
-- **Virtual models** (`registry`): `auto`/`chat`/`large`/`fast`/`small` (+
-  `chat:<size>`); anything whose base isn't a known alias passes through
-  verbatim — including ids with `:` suffixes like OpenRouter's `:free`. Don't
-  reintroduce fan-out for unknown ids.
+- **Virtual models** (`registry`): `auto`/`chat`/`large`/`fast`/`small` plus
+  capability tags `tools`/`vision`/`reasoning` (+ `chat:<tag>`); anything whose
+  base isn't a known alias passes through verbatim — including ids with `:`
+  suffixes like OpenRouter's `:free`. Don't reintroduce fan-out for unknown ids.
+  Resolution order = `ModelSpec.priority` (stable), then provider `prefer=`
+  patterns; `Provider.resolve_models` also accepts a *list* of aliases (per-call
+  fallback chain, deduped in order).
+- **Free guard**: OpenRouter defaults `free_only=True` and raises `ConfigError`
+  from its `_check_free` hook for non-`:free` passthrough ids. Other providers
+  keep the hook a no-op (their whole account is free-tier).
+- **Events**: clients accept `on_event`/`onEvent`; emit kinds
+  `attempt|success|error|wait|discovery`, masked keys only, and swallow callback
+  exceptions.
+- **Persistence** (`_state.py`/`state.ts`): opt-in (`persist=`/`FREELM_PERSIST`),
+  one JSON schema shared by both languages (`provider:sha256(key)[:12]` →
+  rpd/cooldown/disabled with wall-clock timestamps). Never write raw keys.
+- **CLI** (`_cli.py`/`cli.ts`): stdlib/zero-dep only; commands
+  `chat|models|health`; config errors exit 2, other freelm errors exit 1.
 - **Discovery:** providers with `discover=True` (all except Google and NIM)
   fetch `GET /models` on first use; resolution is live → disk cache
   (`~/.cache/freelm`, TTL 1 h, 0600) → hardcoded `DEFAULT_MODELS` fallback. A
