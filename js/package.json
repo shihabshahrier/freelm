@@ -10,7 +10,7 @@
   ],
   "license": "MIT",
   "author": "Shihab Shahriar Antor <shahriarlabs@gmail.com>",
-  "homepage": "https://github.com/shihabshahrier/freelm",
+  "homepage": "https://shihub.online/freelm",
   "repository": { "type": "git", "url": "git+https://github.com/shihabshahrier/freelm.git", "directory": "js" },
   "bugs": { "url": "https://github.com/shihabshahrier/freelm/issues" },
   "type": "module",
