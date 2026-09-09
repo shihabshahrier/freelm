@@ -40,8 +40,8 @@ dependencies = ["httpx>=0.24"]
 dev = ["pytest>=7", "respx>=0.20", "anyio>=4", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://shihub.online/freelm"
-Documentation = "https://shihub.online/freelm/docs"
+Homepage = "https://shihub.site/freelm"
+Documentation = "https://shihub.site/freelm/docs"
 Repository = "https://github.com/shihabshahrier/freelm"
 Issues = "https://github.com/shihabshahrier/freelm/issues"
 
