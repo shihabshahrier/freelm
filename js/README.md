@@ -169,4 +169,4 @@ freelm itself is MIT-licensed. It runs on the providers' own free tiers (verifie
 
 ## License
 
-MIT © Shihab Shahriar Antor / [Shahriar Labs](https://shahriarlabs.com). Built by [Shihab Shahriar Antor](https://shihub.online). Python version: [pypi.org/project/freelm](https://pypi.org/project/freelm/).
+MIT © Shihab Shahriar Antor / [Shahriar Labs](https://shahriarlabs.com). Built by [Shihab Shahriar Antor](https://shihub.site). Python version: [pypi.org/project/freelm](https://pypi.org/project/freelm/).
