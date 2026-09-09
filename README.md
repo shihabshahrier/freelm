@@ -8,7 +8,7 @@
 
 📦 **PyPI:** https://pypi.org/project/freelm/ — `pip install freelm`
 
-🌐 **Website & docs:** https://shihub.online/freelm · https://shihub.online/freelm/docs
+🌐 **Website & docs:** https://shihub.site/freelm · https://shihub.site/freelm/docs
 
 > Python + JS/TS (`npm install freelm`, lives in [`js/`](js/)). A Go port is planned (the core is spec-driven for portability).
 
