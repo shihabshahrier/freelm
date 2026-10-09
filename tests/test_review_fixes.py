@@ -257,3 +257,16 @@ def test_http10_stream_is_not_chunked(started):
     head, _, payload = raw.partition(b"\r\n\r\n")
     assert b"Transfer-Encoding" not in head
     assert payload.startswith(b"data: ") and payload.rstrip().endswith(b"data: [DONE]")
+
+
+@respx.mock
+def test_oversized_body_gets_413_not_a_reset(started):
+    port = started([OpenRouter("k", discover=False)])
+    big = json.dumps({"messages": [{"role": "user", "content": "x" * (21 * 1024 * 1024)}]})
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    status, body = _post(conn, "/v1/chat/completions", json.loads(big))
+    assert status == 413 and b"larger than" in body
+    # the body was drained, so the same connection keeps working
+    conn.request("GET", "/v1/models")
+    r = conn.getresponse()
+    assert r.status == 200 and r.read()
