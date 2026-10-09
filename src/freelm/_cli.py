@@ -133,6 +133,8 @@ def _short(exc: BaseException) -> str:
         obj: Any = json.loads(msg)
         if isinstance(obj, list) and obj:
             obj = obj[0]
+        if isinstance(obj, dict) and isinstance(obj.get("errors"), list) and obj["errors"]:
+            obj = obj["errors"][0]  # Cloudflare: {"errors": [{"code": ..., "message": ...}]}
         if isinstance(obj, dict):
             err = obj.get("error", obj)
             if isinstance(err, dict):
@@ -187,7 +189,8 @@ def _check(p: Any, signup: str, timeout: float) -> Dict[str, Any]:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    from .config import KEYLESS, PROVIDER_ENV, env_keys, keyless_mode
+    from ._keys import mask_key
+    from .config import KEYLESS, PROVIDER_ENV, build_provider, env_keys, env_vars, keyless_mode
 
     configured = [(spec, env_keys(spec)) for spec in PROVIDER_ENV]
     missing = [spec for spec, keys in configured if not keys]
@@ -202,12 +205,18 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         else:
             print("no provider keys found in the environment. Free keys (no credit card needed for most):\n")
             for s in missing:
-                print(f"  {s.name:11} export {s.key_vars[0]}=...   {s.signup_url}")
+                print(f"  {s.name:11} export {' '.join(v + '=...' for v in env_vars(s))}   {s.signup_url}")
             print("\nSet one or more, then run `freelm doctor` again.")
     rows: List[Dict[str, Any]] = []
     for spec, keys in configured:
         for key in keys:
-            row = _check(spec.cls(key, tier=os.getenv(spec.tier_var, "free")), spec.signup_url, args.timeout)
+            try:
+                p = build_provider(spec, key)
+            except ConfigError as e:  # e.g. a Cloudflare token without its account id
+                row = {"provider": spec.name, "key": mask_key(key), "model": None, "latency_ms": None,
+                       "status": "FAIL", "works": False, "detail": str(e)}
+            else:
+                row = _check(p, spec.signup_url, args.timeout)
             rows.append(row)
             if not args.json:
                 print(f"  {row['provider']:11} {row['key']:16} {row['status']:4}  {row['detail']}", flush=True)
@@ -232,7 +241,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         if have_keys and missing:
             print("\nnot configured (more free capacity, more failover):")
             for s in missing:
-                print(f"  {s.name:11} {s.key_vars[0]:22} {s.signup_url}")
+                print(f"  {s.name:11} {' + '.join(env_vars(s)):22} {s.signup_url}")
         ready = sorted({r["provider"] for r in working + keyless_ok})
         parts = [f"{len(working)} of {len(rows)} key(s) working" if rows else "no keys configured"]
         if keyless_rows:

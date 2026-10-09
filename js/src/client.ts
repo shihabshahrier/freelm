@@ -107,6 +107,15 @@ function chunkText(chunk: any): string | null {
   return typeof c === "string" && c ? c : null;
 }
 
+/** Workers AI sometimes streams a numeric token as a JSON number
+ * (`"content": 6`); make it text before anyone joins the deltas. */
+function repairChunk(chunk: any): void {
+  for (const c of Array.isArray(chunk?.choices) ? chunk.choices : []) {
+    const d = c?.delta;
+    if (d && typeof d.content === "number") d.content = String(d.content);
+  }
+}
+
 /** Does this chunk carry anything a consumer would act on (text, tool calls,
  * reasoning, a finish reason)? Role-only preambles don't. */
 function hasOutput(chunk: any): boolean {
@@ -360,7 +369,7 @@ export class FreeLLM {
 
   private async doRequest(cand: Candidate, req: ChatRequest, deadline: number | null, signal?: AbortSignal): Promise<ChatResponse> {
     const p = cand.provider;
-    const body = buildPayload(req, cand.model);
+    const body = p.adaptPayload(buildPayload(req, cand.model));
     const t0 = nowS();
     // one attempt may not outlive the call's overall deadline; the timer spans
     // headers *and* body (fetch doesn't bound body reads on its own)
@@ -508,7 +517,7 @@ export class FreeLLM {
 
   private async *streamRequest(cand: Candidate, req: ChatRequest, signal?: AbortSignal): AsyncGenerator<Record<string, any>> {
     const p = cand.provider;
-    const body = { ...buildPayload(req, cand.model), stream: true };
+    const body = p.adaptPayload({ ...buildPayload(req, cand.model), stream: true });
     const ac = new AbortController();
     const unlink = link(signal, ac);
     let res: Response;
@@ -555,6 +564,7 @@ export class FreeLLM {
           if (sse.done) return; // [DONE]: stop even if the server keeps the connection open
           if (!obj) continue;
           if (obj.error) throw errorFrame(p, obj.error);
+          repairChunk(obj);
           output ||= hasOutput(obj);
           yield obj;
         }

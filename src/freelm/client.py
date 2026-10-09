@@ -140,6 +140,17 @@ def _sse_delta(line: str) -> Optional[str]:
     return _chunk_text(obj) if obj is not None else None
 
 
+def _repair_chunk(chunk: Dict[str, Any]) -> None:
+    """Workers AI sometimes streams a numeric token as a JSON number
+    (``"content": 6``); make it text before anyone joins the deltas."""
+    for c in chunk.get("choices") or []:
+        d = c.get("delta") if isinstance(c, dict) else None
+        if isinstance(d, dict):
+            v = d.get("content")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                d["content"] = str(v)
+
+
 def _has_output(chunk: Dict[str, Any]) -> bool:
     """Does this chunk carry anything a consumer would act on (text, tool
     calls, reasoning, a finish reason)? Role-only preambles don't."""
@@ -496,6 +507,7 @@ class FreeLLM(_BaseClient):
         p = cand.provider
         body = req.payload(cand.model)
         body["stream"] = True
+        body = p.adapt_payload(body)
         try:
             with self._client.stream("POST", p.url, headers=p.headers(cand.key.key), json=body) as r:
                 if r.status_code != 200:
@@ -511,6 +523,7 @@ class FreeLLM(_BaseClient):
                         continue
                     if obj.get("error"):
                         raise _error_frame(p, obj["error"])
+                    _repair_chunk(obj)
                     output = output or _has_output(obj)
                     yield obj
                 if not sse.done and not output:
@@ -523,7 +536,7 @@ class FreeLLM(_BaseClient):
 
     def _do(self, cand: Candidate, req, deadline: Optional[float] = None) -> ChatResponse:
         p = cand.provider
-        body = req.payload(cand.model)
+        body = p.adapt_payload(req.payload(cand.model))
         t0 = time.monotonic()
         try:
             r = self._client.post(
@@ -716,6 +729,7 @@ class AsyncFreeLLM(_BaseClient):
         client = self._ensure_client()
         body = req.payload(cand.model)
         body["stream"] = True
+        body = p.adapt_payload(body)
         try:
             async with client.stream("POST", p.url, headers=p.headers(cand.key.key), json=body) as r:
                 if r.status_code != 200:
@@ -731,6 +745,7 @@ class AsyncFreeLLM(_BaseClient):
                         continue
                     if obj.get("error"):
                         raise _error_frame(p, obj["error"])
+                    _repair_chunk(obj)
                     output = output or _has_output(obj)
                     yield obj
                 if not sse.done and not output:
@@ -743,7 +758,7 @@ class AsyncFreeLLM(_BaseClient):
     async def _ado(self, cand: Candidate, req, deadline: Optional[float] = None) -> ChatResponse:
         p = cand.provider
         client = self._ensure_client()
-        body = req.payload(cand.model)
+        body = p.adapt_payload(req.payload(cand.model))
         t0 = time.monotonic()
         try:
             r = await client.post(

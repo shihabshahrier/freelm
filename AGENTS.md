@@ -1,7 +1,8 @@
 # freelm — agent guide
 
 Free, always-up LLM client + gateway pooling free-tier providers (OpenRouter,
-Google AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral) behind one
+Google AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral, Z.ai, Cohere, Cloudflare
+Workers AI; keyless Kilo/OVHcloud on request) behind one
 OpenAI-compatible API with key rotation, cross-provider failover, circuit
 breaking, quota-aware routing, and live model discovery.
 
@@ -66,9 +67,12 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   `timeout` deadline.
 - **Error taxonomy** (`classify()`) — *no status aborts a call on its own*:
   401/403 (and 400 "API key not valid"/location errors) `AuthError` and 402
-  `QuotaExhausted` → disable key, fail over (a 402 naming the model benches
-  the model instead); 429 `RateLimited` → cool key, or if model-scoped per
-  `rate_limit_scope` (Gemini, Groq: per-model quotas) bench just the model;
+  (or a 429 saying the quota is gone "/ month") `QuotaExhausted` → disable
+  key, fail over (a 402 naming the model benches the model instead; a 403
+  saying the model needs a paid plan is `ModelNotFound(gone=True)`); 429
+  `RateLimited` → cool key (an hour when the body says the *daily* quota is
+  spent and no retry time is given — `DAILY_QUOTA_RETRY`), or if model-scoped per
+  `rate_limit_scope` (Gemini, Groq, Z.ai, Cohere: per-model quotas) bench just the model;
   408/409/425/any 5xx `Transient` → breaker + backoff, or if model-scoped per
   `transient_scope` (Gemini "high demand") bench the model; 404/410 and
   400/422 "decommissioned/no longer..." `ModelNotFound(gone=True)` → bench the
@@ -85,7 +89,7 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   for causes that hit everyone — retired 410/"end of life", OpenRouter
   `rate_limit_scope == "upstream"`, model-scoped overload 5xx) and per key
   (`KeyState.bench_model`, for that account's per-model quota — scope
-  `"model"` 429s on Gemini/Groq/OVH — "no access" 404s and 402s naming the
+  `"model"` 429s on Gemini/Groq/Z.ai/Cohere/OVH — "no access" 404s and 402s naming the
   model). Benched candidates keep their rank slot in `order_candidates` and
   are skipped in `select_candidate` — dropping them would let a provider full
   of dead models monopolise rank 0 and starve the interleave. `soonest_wait`
@@ -101,11 +105,12 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   Resolution order = `ModelSpec.priority` (stable), then provider `prefer=`
   patterns; `Provider.resolve_models` also accepts a *list* of aliases (per-call
   fallback chain, deduped in order).
-- **Free guard**: providers with `free_only=True` (OpenRouter, Kilo) reject a
+- **Free guard**: providers with `free_only=True` (OpenRouter, Kilo, Z.ai) reject a
   concrete id unless it is `:free` or listed free (`ModelSpec.free`, from
   discovery: `:free`, Kilo `isFree`, or zero pricing). Aliases never resolve to
-  a paid model there. Other providers keep `free_only=False` (whole account is
-  free-tier).
+  a paid model there. Z.ai has no discovery: its explicit list holds only the
+  free Flash models, so every other GLM id is refused. Other providers keep
+  `free_only=False` (whole account is free-tier).
 - **Keyless providers** (`Kilo`, `OVHcloud`; `keyless = True`, placeholder key
   `ANONYMOUS` → no Authorization header, masked as `(keyless)`): the library
   adds them only on request (`keyless=True|"auto"`, `FREELM_KEYLESS`); the CLI
@@ -122,9 +127,13 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   errors exit 2, other freelm errors exit 1. `doctor` sends one tiny chat per
   key (`/models` returns 200 for dead keys on several providers, so it can't be
   trusted) and prints a fix + signup link per failure; the provider table
-  (`PROVIDER_ENV`) lives in `config`.
-- **Discovery:** providers with `discover=True` (all except Google and NIM; an
-  explicit `models=[...]` turns it off)
+  (`PROVIDER_ENV`) lives in `config`. `option_vars`/`optionVars` feed extra
+  constructor options from the env (Cloudflare's `CLOUDFLARE_ACCOUNT_ID`, which
+  is part of its URL) through `build_provider`/`buildProvider` — used by both
+  `from_env` and `doctor`; a missing required option skips that provider with a
+  stderr notice (doctor: a FAIL row), never a crash.
+- **Discovery:** providers with `discover=True` (all except Google, NIM, Z.ai,
+  Cohere and Cloudflare; an explicit `models=[...]` turns it off)
   fetch `GET /models` on first use; resolution is live → disk cache
   (`~/.cache/freelm`, TTL 1 h, 0600) → hardcoded `DEFAULT_MODELS` fallback. A
   cached list yielding zero usable specs must fall through to a live fetch.
@@ -134,7 +143,13 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   `streamChunks`); `stream()` maps them to text. Failover only before the
   first output (raw mode holds role-only preambles back); success records
   time-to-first-token into the latency EWMA. `apply_success` ignores latency
-  samples <= 0 — keep it that way.
+  samples <= 0 — keep it that way. A numeric `delta.content` (Workers AI
+  streams some tokens as JSON numbers) is repaired to text before anything
+  else sees the chunk (`_repair_chunk`/`repairChunk`).
+- **Provider quirks** go in provider hooks, not the client: `rate_limit_scope`/
+  `transient_scope` (who a 429/5xx throttles) and `adapt_payload` (last look at
+  the request body — Cloudflare adds `max_tokens`, since many Workers AI models
+  stop at 256 tokens by default).
 - **`serve`**: zero-dep OpenAI-compatible endpoint. Python: stdlib
   `ThreadingHTTPServer`, every request handed to one `AsyncFreeLLM` on a
   private loop thread (single-loop safety). TS: `node:http` loaded via

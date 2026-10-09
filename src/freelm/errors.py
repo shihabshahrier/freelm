@@ -177,7 +177,7 @@ _RETIRED_HINTS = ("no longer", "decommission", "deprecated", "end of life", "end
 _GONE_HINTS = (
     "no longer", "decommission", "deprecated", "end of life", "end-of-life", "retired",
     "not found", "not_found", "does not exist", "unknown model", "invalid model",
-    "model not available",
+    "model not available", "no such model",
 )
 # The model exists but lacks a capability this request needs (tools, images, ...).
 _CAPABILITY_HINTS = ("support", "tool use", "not enabled")
@@ -194,6 +194,16 @@ _AUTH_HINTS = (
 )
 # A 403 about the *content* (OpenRouter moderation), not the key.
 _MODERATION_HINTS = ("flagged", "moderation")
+# A model this account's plan doesn't include (Cloudflare's Workers Paid-only
+# models answer 403 on the Free plan) — the key itself is fine.
+_PLAN_HINTS = ("workers paid", "paid plan")
+# A 429 meaning the quota is spent for the month (Cohere trial keys) — no
+# recovery soon, like a 402 — or for the day (Cloudflare's daily free Neurons,
+# OpenRouter's free-models-per-day): when no retry time is given, look again in
+# an hour rather than every minute (daily resets aren't reliably at 00:00 UTC).
+_MONTHLY_HINTS = ("/ month", "per month", "monthly limit", "monthly quota")
+_DAILY_HINTS = ("per day", "per-day", "daily free allocation", "daily limit", "daily quota")
+DAILY_QUOTA_RETRY = 3600.0
 # Google AI Studio refuses whole regions with a 400.
 _LOCATION_HINTS = ("location is not supported", "unsupported_country", "not available in your country")
 # Google puts the server-suggested wait in the JSON body: "retryDelay": "36s"
@@ -217,11 +227,17 @@ def classify(status: int, headers: Optional[Dict[str, str]], body: str, provider
         return AuthError(provider, status, msg)
     if status == 403 and any(h in low for h in _MODERATION_HINTS):
         return BadRequest(provider, status, msg)
+    if status == 403 and any(h in low for h in _PLAN_HINTS):
+        return ModelNotFound(provider, status, msg, gone=True)  # not on this account's plan
     if status in (401, 403):
         return AuthError(provider, status, msg)
     if status == 402:
         return QuotaExhausted(provider, status, msg)
     if status == 429:
+        if any(h in low for h in _MONTHLY_HINTS):
+            return QuotaExhausted(provider, status, msg)
+        if retry_after is None and any(h in low for h in _DAILY_HINTS):
+            retry_after = DAILY_QUOTA_RETRY
         return RateLimited(provider, status, msg, retry_after=retry_after)
     if status in _TRANSIENT_STATUS or 500 <= status <= 599:
         return Transient(provider, status, msg, retry_after=retry_after)

@@ -33,7 +33,21 @@ from .errors import (
     RateLimited,
     Transient,
 )
-from .providers import NIM, Cerebras, Gemini, GoogleAIStudio, Groq, Kilo, Mistral, OpenRouter, OVHcloud, Provider
+from .providers import (
+    NIM,
+    ZAI,
+    Cerebras,
+    CloudflareWorkersAI,
+    Cohere,
+    Gemini,
+    GoogleAIStudio,
+    Groq,
+    Kilo,
+    Mistral,
+    OpenRouter,
+    OVHcloud,
+    Provider,
+)
 from .registry import ModelSpec
 
 
@@ -57,6 +71,9 @@ __all__ = [
     "Mistral",
     "Kilo",
     "OVHcloud",
+    "ZAI",
+    "Cohere",
+    "CloudflareWorkersAI",
     "ModelSpec",
     "Message",
     "ChatRequest",

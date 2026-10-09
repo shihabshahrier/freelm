@@ -88,9 +88,7 @@ export class KeyState {
   }
 
   masked(): string {
-    const k = this.key;
-    if (k === ANONYMOUS) return "(keyless)";
-    return k.length > 12 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "***";
+    return maskKey(this.key);
   }
 
   /** Never put the raw key in logs: console.log / util.inspect / JSON.stringify
@@ -102,6 +100,12 @@ export class KeyState {
   toJSON(): Record<string, unknown> {
     return { key: this.masked(), tier: this.tier, disabled: this.disabled, rpdUsed: this.rpdUsed, lastError: this.lastError };
   }
+}
+
+/** How a key is shown anywhere (events, health, errors, doctor) — never raw. */
+export function maskKey(key: string): string {
+  if (key === ANONYMOUS) return "(keyless)";
+  return key.length > 12 ? `${key.slice(0, 6)}...${key.slice(-4)}` : "***";
 }
 
 export function newKeyState(key: string, tier: string, rpm: number | null, rpd: number | null): KeyState {

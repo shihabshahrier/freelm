@@ -5,7 +5,20 @@
  * last-resort fallbacks) or "auto" (only when no keys are configured — what the
  * CLI uses). The library never routes prompts to them silently. */
 import { ConfigError } from "./errors.js";
-import { Cerebras, GoogleAIStudio, Groq, Kilo, Mistral, NIM, OpenRouter, OVHcloud, Provider } from "./providers/index.js";
+import {
+  Cerebras,
+  CloudflareWorkersAI,
+  Cohere,
+  GoogleAIStudio,
+  Groq,
+  Kilo,
+  Mistral,
+  NIM,
+  OpenRouter,
+  OVHcloud,
+  Provider,
+  ZAI,
+} from "./providers/index.js";
 import { env } from "./runtime.js";
 
 /** How one provider is configured from the environment. */
@@ -15,6 +28,8 @@ export interface ProviderEnv {
   keyVars: string[]; // first non-empty wins; comma-separated = several keys
   tierVar: string;
   signupUrl: string; // where to get a free key
+  /** Extra constructor options from the env: { option: [VAR, ...] }, first non-empty VAR wins. */
+  optionVars?: Record<string, string[]>;
 }
 
 // Order = default provider order for fromEnv().
@@ -33,6 +48,13 @@ export const PROVIDER_ENV: ProviderEnv[] = [
     tierVar: "FREELM_CEREBRAS_TIER", signupUrl: "https://cloud.cerebras.ai" },
   { name: "mistral", cls: Mistral, keyVars: ["MISTRAL_API_KEY", "FREELM_MISTRAL_KEYS"],
     tierVar: "FREELM_MISTRAL_TIER", signupUrl: "https://console.mistral.ai/api-keys" },
+  { name: "zai", cls: ZAI, keyVars: ["ZAI_API_KEY", "FREELM_ZAI_KEYS"],
+    tierVar: "FREELM_ZAI_TIER", signupUrl: "https://z.ai/manage-apikey/apikey-list" },
+  { name: "cohere", cls: Cohere, keyVars: ["COHERE_API_KEY", "CO_API_KEY", "FREELM_COHERE_KEYS"],
+    tierVar: "FREELM_COHERE_TIER", signupUrl: "https://dashboard.cohere.com/api-keys" },
+  { name: "cloudflare", cls: CloudflareWorkersAI, keyVars: ["CLOUDFLARE_API_TOKEN", "FREELM_CLOUDFLARE_KEYS"],
+    tierVar: "FREELM_CLOUDFLARE_TIER", signupUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    optionVars: { accountId: ["CLOUDFLARE_ACCOUNT_ID"] } },
   { name: "kilo", cls: Kilo, keyVars: ["KILO_API_KEY", "FREELM_KILO_KEYS"],
     tierVar: "FREELM_KILO_TIER", signupUrl: "https://app.kilo.ai" },
 ];
@@ -71,13 +93,36 @@ export function envKeys(spec: ProviderEnv): string[] {
   return split(firstEnv(...spec.keyVars));
 }
 
+/** The variables to set for one provider (key first), for setup hints. */
+export function envVars(spec: ProviderEnv): string[] {
+  return [spec.keyVars[0], ...Object.values(spec.optionVars ?? {}).map((names) => names[0])];
+}
+
+/** `spec`'s provider for `keys`, with its tier and options from the env. Throws
+ * ConfigError when a required option is missing (Cloudflare's account id). */
+export function buildProvider(spec: ProviderEnv, keys: string[]): Provider {
+  const opts: Record<string, unknown> = { tier: env(spec.tierVar) ?? "free" };
+  for (const [opt, names] of Object.entries(spec.optionVars ?? {})) {
+    const v = firstEnv(...names);
+    if (v) opts[opt] = v;
+  }
+  return new spec.cls(keys, opts);
+}
+
 /** Providers for every key found in the environment, plus the keyless
  * endpoints when `keyless` (or FREELM_KEYLESS) asks for them. */
 export function providersFromEnv(keyless?: KeylessArg): Provider[] {
   const provs: Provider[] = [];
   for (const spec of PROVIDER_ENV) {
     const keys = envKeys(spec);
-    if (keys.length) provs.push(new spec.cls(keys, { tier: env(spec.tierVar) ?? "free" }));
+    if (!keys.length) continue;
+    try {
+      provs.push(buildProvider(spec, keys));
+    } catch (e) {
+      if (!(e instanceof ConfigError)) throw e;
+      // e.g. a Cloudflare token without its account id
+      (globalThis as any).process?.stderr?.write?.(`freelm: ${e.message}; skipping it.\n`);
+    }
   }
   const mode = keylessMode(keyless);
   if (mode === "always" || (mode === "auto" && !provs.length)) {

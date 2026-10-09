@@ -124,7 +124,7 @@ const RETIRED_HINTS = ["no longer", "decommission", "deprecated", "end of life",
 const GONE_HINTS = [
   "no longer", "decommission", "deprecated", "end of life", "end-of-life", "retired",
   "not found", "not_found", "does not exist", "unknown model", "invalid model",
-  "model not available",
+  "model not available", "no such model",
 ];
 // The model exists but lacks a capability this request needs (tools, images, ...).
 const CAPABILITY_HINTS = ["support", "tool use", "not enabled"];
@@ -140,6 +140,16 @@ const AUTH_HINTS = [
 ];
 // A 403 about the *content* (OpenRouter moderation), not the key.
 const MODERATION_HINTS = ["flagged", "moderation"];
+// A model this account's plan doesn't include (Cloudflare's Workers Paid-only
+// models answer 403 on the Free plan) — the key itself is fine.
+const PLAN_HINTS = ["workers paid", "paid plan"];
+// A 429 meaning the quota is spent for the month (Cohere trial keys) — no
+// recovery soon, like a 402 — or for the day (Cloudflare's daily free Neurons,
+// OpenRouter's free-models-per-day): when no retry time is given, look again in
+// an hour rather than every minute (daily resets aren't reliably at 00:00 UTC).
+const MONTHLY_HINTS = ["/ month", "per month", "monthly limit", "monthly quota"];
+const DAILY_HINTS = ["per day", "per-day", "daily free allocation", "daily limit", "daily quota"];
+export const DAILY_QUOTA_RETRY = 3600;
 // Google AI Studio refuses whole regions with a 400.
 const LOCATION_HINTS = ["location is not supported", "unsupported_country", "not available in your country"];
 // Google puts the server-suggested wait in the JSON body: "retryDelay": "36s"
@@ -160,9 +170,14 @@ export function classify(status: number, headers: Record<string, string> | null 
   const low = (body || "").toLowerCase();
   if ((status === 400 || status === 401 || status === 403) && has(low, AUTH_HINTS)) return new AuthError(provider, status, msg);
   if (status === 403 && has(low, MODERATION_HINTS)) return new BadRequest(provider, status, msg);
+  if (status === 403 && has(low, PLAN_HINTS)) return new ModelNotFound(provider, status, msg, true); // not on this account's plan
   if (status === 401 || status === 403) return new AuthError(provider, status, msg);
   if (status === 402) return new QuotaExhausted(provider, status, msg);
-  if (status === 429) return new RateLimited(provider, status, msg, retryAfter);
+  if (status === 429) {
+    if (has(low, MONTHLY_HINTS)) return new QuotaExhausted(provider, status, msg);
+    if (retryAfter === null && has(low, DAILY_HINTS)) retryAfter = DAILY_QUOTA_RETRY;
+    return new RateLimited(provider, status, msg, retryAfter);
+  }
   if (TRANSIENT_STATUS.has(status) || (status >= 500 && status <= 599)) return new Transient(provider, status, msg, retryAfter);
   if (GONE_STATUS.has(status)) {
     // OpenRouter 404s "No endpoints found that support tool use": the model is
