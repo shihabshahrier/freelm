@@ -16,7 +16,23 @@ export function modelSpec(id: string, tags: string[] = [], ctx = 0, free = true,
 const SIZE_ALIASES: Record<string, string> = { best: "large", big: "large", mini: "small", cheap: "small", lite: "small" };
 // tags that can be asked for directly: `chat:tools`, `vision`, `reasoning`, ...
 const TAG_ALIASES = new Set(["large", "fast", "small", "tools", "vision", "reasoning"]);
+// hard capabilities: a model without them fails the request (tools / images),
+// so no fallback. Sizes and "reasoning" are soft preferences.
+const CAPABILITY_TAGS = new Set(["tools", "vision"]);
 const VIRTUAL = new Set(["auto", "chat", "default", ...TAG_ALIASES, ...Object.keys(SIZE_ALIASES)]);
+
+/** The router's virtual aliases (`auto`, `chat`, `fast`, `tools`, ...). */
+export function virtualAliases(): string[] {
+  return [...VIRTUAL].sort();
+}
+
+/** True for router aliases (`auto`, `chat:fast`, `tools`, ...); false for
+ * anything that will be treated as a concrete model id. */
+export function isVirtual(alias: string): boolean {
+  const a = alias.trim().toLowerCase();
+  const idx = a.indexOf(":");
+  return VIRTUAL.has(idx >= 0 ? a.slice(0, idx) : a);
+}
 
 export function resolveModels(models: ModelSpec[], alias: string): string[] {
   const ids = models.map((m) => m.id);
@@ -37,6 +53,9 @@ export function resolveModels(models: ModelSpec[], alias: string): string[] {
   if (TAG_ALIASES.has(want)) {
     const tagged = ordered.filter((m) => m.tags.includes(want)).map((m) => m.id);
     if (tagged.length) return tagged;
+    // a capability is a hard requirement: sending tools or images to a model
+    // without them just fails — let a provider that has one serve
+    if (CAPABILITY_TAGS.has(want)) return [];
   }
 
   const chat = ordered.filter((m) => m.tags.includes("chat")).map((m) => m.id);

@@ -1,6 +1,8 @@
 """Run me:  python examples/basic.py
 
-Set at least one of OPENROUTER_API_KEY / GEMINI_API_KEY / NVIDIA_API_KEY first.
+Set at least one free key first (GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, ...);
+`freelm doctor` shows which ones work. No keys yet? Run with FREELM_KEYLESS=1 to try
+the keyless public endpoints (low limits).
 """
 from freelm import FreeLLM
 

@@ -1,172 +1,140 @@
-# freelm — free, always-up LLM client for Node.js & TypeScript
+# freelm — free LLM API for Node.js & TypeScript (OpenAI-compatible, auto-failover)
 
-[![npm](https://img.shields.io/npm/v/freelm.svg)](https://www.npmjs.com/package/freelm)
-[![license](https://img.shields.io/npm/l/freelm.svg)](../LICENSE)
+[![npm](https://img.shields.io/npm/v/freelm?label=npm)](https://www.npmjs.com/package/freelm)
+[![CI](https://github.com/shihabshahrier/freelm/actions/workflows/js-ci.yml/badge.svg)](https://github.com/shihabshahrier/freelm/actions/workflows/js-ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/shihabshahrier/freelm/blob/main/LICENSE)
 
-**freelm is a free, always-up LLM client for Node.js/TypeScript** that pools multiple free-tier LLM providers — **OpenRouter, Google Gemini (AI Studio), NVIDIA NIM, Groq, Cerebras, and Mistral** — behind one OpenAI-compatible call (with streaming), with automatic key rotation, cross-provider failover, circuit breaking, and live free-model discovery. Drop in whichever free keys you have and your app keeps talking to an LLM even when one source rate-limits or goes down.
+**freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cerebras, Mistral and NVIDIA NIM into one
+OpenAI-compatible LLM — in your TypeScript code, or as a local `/v1` endpoint for any tool (`npx freelm serve`).**
+It rotates your keys, fails over across providers on rate limits, outages and retired models, and discovers which
+models are free today. Zero dependencies, ESM + CommonJS, your own keys called directly.
 
-> The TypeScript port of [freelm for Python](https://pypi.org/project/freelm/) — same API, same behavior. Zero runtime dependencies (uses the built-in `fetch`).
-
-## Install
+> Also on PyPI with the same engine: [`pip install freelm`](https://pypi.org/project/freelm/).
 
 ```bash
-npm install freelm
+npm install freelm        # Node >= 20
 ```
-
-## Quick start
 
 ```ts
 import { FreeLLM } from "freelm";
 
-const llm = FreeLLM.fromEnv();                 // reads provider keys from env
-console.log(await llm.text("Explain black holes in one sentence."));
+const llm = FreeLLM.fromEnv();     // reads GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, ...
+console.log(await llm.text("Explain failover in one sentence."));
 ```
 
-Explicit config:
+## Start in 60 seconds
+
+**Zero keys?** `npx freelm chat "hello"` already works: with no keys set, the CLI falls back to keyless public
+endpoints (Kilo Gateway free routes, OVHcloud anonymous) and says so — low limits, free routes may log prompts. In
+code that's opt-in: `FreeLLM.fromEnv({ keyless: "auto" })` or `FREELM_KEYLESS=1`.
+
+1. Get one free key (no card): [Google AI Studio](https://aistudio.google.com/apikey); add
+   [Groq](https://console.groq.com/keys) / [OpenRouter](https://openrouter.ai/keys) for failover.
+2. `export GEMINI_API_KEY=...`
+3. `npx freelm doctor` — one tiny request per key; says exactly what's wrong and where to get a new key.
+
+## Local OpenAI-compatible endpoint
+
+```bash
+npx freelm serve          # → http://127.0.0.1:4000/v1  (/v1/chat/completions with SSE, /v1/models, /health)
+```
+
+Point the OpenAI SDK, LangChain, LlamaIndex, Continue, Cline, Aider, Open WebUI or n8n at
+`http://127.0.0.1:4000/v1` with any API key and model `auto`. With the Vercel AI SDK:
 
 ```ts
-import { FreeLLM, OpenRouter, GoogleAIStudio, NIM, Groq, Cerebras, Mistral } from "freelm";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { generateText } from "ai";
+
+const freelm = createOpenAICompatible({ name: "freelm", baseURL: "http://127.0.0.1:4000/v1" });
+const { text } = await generateText({ model: freelm("auto"), prompt: "hi" });
+```
+
+Embed it instead of using the CLI: `import { serve } from "freelm"; await serve({ port: 4000 });`. It binds to
+localhost; set `apiKey` / `--api-key` before exposing it.
+
+## Usage
+
+```ts
+import { FreeLLM, GoogleAIStudio, Groq, OpenRouter } from "freelm";
 
 const llm = new FreeLLM(
-  [
-    new OpenRouter("sk-or-..."),
-    new GoogleAIStudio("AIza..."),
-    new Groq("gsk_..."),
-    new Cerebras("csk-..."),
-    new Mistral("..."),
-    new NIM("nvapi-..."),
-  ],
-  { strategy: "quota_aware" },                  // priority | round_robin | quota_aware | latency
+  [new GoogleAIStudio("AIza..."), new Groq("gsk_..."), new OpenRouter("sk-or-...")],
+  { strategy: "quota_aware" },   // priority | round_robin | quota_aware | latency
 );
 
 const r = await llm.chat([{ role: "user", content: "Write a haiku about failover." }], { model: "chat:fast" });
-console.log(r.text, "via", r.provider);
+console.log(r.text, "via", r.provider, r.model);
+
+// streaming — fails over before the first token; cancel with an AbortSignal
+for await (const chunk of llm.stream("Count to five.", { signal: AbortSignal.timeout(30_000) })) process.stdout.write(chunk);
+
+// raw chat.completion.chunk objects (tool-call deltas, finish_reason, usage)
+for await (const c of llm.streamChunks(msgs, { tools })) console.log(c.choices[0].delta);
+
+// tools / JSON mode pass straight through
+const t = await llm.chat(msgs, { model: "chat:tools", tools, tool_choice: "auto" });
+t.toolCalls;
 ```
 
-## Streaming
-
-```ts
-for await (const chunk of llm.stream("Stream me some tokens")) {
-  process.stdout.write(chunk);
-}
-```
-
-Streaming fails over between providers **before the first token**; once tokens flow it stays on that provider.
-
-## Drop-in OpenAI shim
+**Drop-in for the OpenAI SDK:**
 
 ```ts
 // import OpenAI from "openai";
 import { OpenAI } from "freelm/compat";
 
-const client = new OpenAI();                    // backed by FreeLLM.fromEnv()
-const r = await client.chat.completions.create({
-  model: "auto",
-  messages: [{ role: "user", content: "hi" }],
-});
-console.log(r.choices[0].message.content);
-```
-
-OpenAI-SDK constructor options (`{ apiKey, baseURL, ... }`) are accepted and
-ignored — keys come from the environment. `stream: true` yields
-`chat.completion.chunk`-shaped objects:
-
-```ts
-const stream = await client.chat.completions.create({ model: "auto", messages, stream: true });
+const client = new OpenAI();   // { apiKey, baseURL, ... } accepted and ignored; keys come from the environment
+const r = await client.chat.completions.create({ model: "auto", messages: [{ role: "user", content: "hi" }] });
+const stream = await client.chat.completions.create({ model: "auto", messages, stream: true }, { signal });
 for await (const chunk of stream) process.stdout.write(chunk.choices[0].delta.content ?? "");
 ```
 
-## Model & provider priority
+## Providers & environment
 
-```ts
-// 1. ModelSpec priority — order a static list (lower = first)
-new OpenRouter("sk-or-...", { discover: false, models: [
-  modelSpec("meta-llama/llama-3.3-70b-instruct:free", ["chat", "large"], 131072, true, 0),
-  modelSpec("openai/gpt-oss-120b:free", ["chat", "large"], 131072, true, 1),
-]});
+| Provider | Free key | Variable (comma-separate for several keys) |
+|----------|----------|------------------------------------------|
+| Google AI Studio | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `FREELM_GOOGLE_KEYS` |
+| Groq | [console.groq.com/keys](https://console.groq.com/keys) | `GROQ_API_KEY` / `FREELM_GROQ_KEYS` |
+| OpenRouter (`:free` models) | [openrouter.ai/keys](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` / `FREELM_OPENROUTER_KEYS` |
+| Kilo Gateway (works keyless) | [app.kilo.ai](https://app.kilo.ai) | `KILO_API_KEY` / `FREELM_KILO_KEYS` (optional) |
+| OVHcloud AI Endpoints | none — anonymous only | — |
+| Cerebras (trial credits, no longer permanently free) | [cloud.cerebras.ai](https://cloud.cerebras.ai) | `CEREBRAS_API_KEY` / `FREELM_CEREBRAS_KEYS` |
+| Mistral | [console.mistral.ai](https://console.mistral.ai/api-keys) | `MISTRAL_API_KEY` / `FREELM_MISTRAL_KEYS` |
+| NVIDIA NIM | [build.nvidia.com](https://build.nvidia.com/settings/api-keys) | `NVIDIA_API_KEY` / `NIM_API_KEY` / `FREELM_NIM_KEYS` |
 
-// 2. prefer — bias *discovered* lists (exact id, else substring; survives refresh)
-new OpenRouter("sk-or-...", { prefer: ["qwen3", "gpt-oss"] });
+Any other OpenAI-compatible endpoint: `new Provider("key", { name: "myhost", baseUrl: "https://.../v1", models: [modelSpec("id", ["chat"])] })`.
 
-// 3. per-call ordered fallback chain (ids + aliases mix)
-await llm.chat(msgs, { model: ["llama-3.3-70b-versatile", "chat:fast"] });
-```
+## Models
 
-Provider `priority` (lower = first) breaks ties in **every** strategy.
+`"auto"` / `"chat"` (best available, non-thinking first), `"chat:fast"`, `"chat:large"`, `"chat:small"`,
+`"chat:tools"` / `"vision"` (only capable models), `"reasoning"`, a concrete id (routed only to providers that list
+it), or an ordered fallback list `["vendor/id", "chat:fast"]`. Bias discovered lists with `prefer: [...]`; rank
+providers with `priority` (lower = first). Free model ids churn, so freelm discovers them live and benches retired or
+overloaded models on the first 404/410/503 instead of retrying them.
 
-## Free-only guard
+## Reliability, observability, persistence
 
-OpenRouter mixes paid and free models, so it ships with `freeOnly: true`: a
-non-`:free` model id throws `ConfigError` instead of silently billing you.
-Opt out: `new OpenRouter(key, { freeOnly: false })`. Other providers' free-tier
-accounts are free for every model.
+- Every failure fails over: 429 → rotate key (or bench just the model where quotas are per-model); 5xx/timeouts →
+  breaker + backoff; 401/402 → disable key; retired model → bench it; one provider rejecting a request → next
+  provider (raised only if two providers reject it). Breadth-first across providers, so none can stall a call.
+- `new FreeLLM(provs, { onEvent: (e) => console.log(e.kind, e.provider, e.model, e.status) })` — keys always masked.
+- `{ persist: true }` (or `FREELM_PERSIST=1`) keeps quota/cooldown/disabled-key state across restarts
+  (`~/.cache/freelm/state.json`, 0600, key hashes only). `llm.health()`, `llm.resetKeys()`.
+- No `node:` imports in the library: it bundles for edge functions, Workers and browsers (disk cache/persistence
+  switch on only where Node built-ins exist).
 
-## Tool calling, observability, persistence, CLI
-
-```ts
-// tools / JSON output pass straight through
-const r = await llm.chat(msgs, { model: "chat:tools", tools, tool_choice: "auto" });
-r.toolCalls;
-
-// watch every attempt/failover/success (keys always masked)
-const llm = new FreeLLM(provs, { onEvent: (e) => console.log(e.kind, e.provider, e.model, e.status) });
-
-// carry quota/cooldowns/disabled keys across restarts (~/.cache/freelm/state.json)
-new FreeLLM(provs, { persist: true });   // or env FREELM_PERSIST=1
-```
+## CLI
 
 ```bash
-npx freelm chat "explain failover in one line" --stream
-npx freelm models --provider openrouter
+npx freelm chat "explain failover in one line" --model chat:fast --stream
+npx freelm doctor [--json]
+npx freelm serve [--port 4000] [--api-key KEY] [--cors] [--no-fallback]
+npx freelm models --provider groq
 npx freelm health
 ```
 
-## Environment variables
+Full docs, comparison with other free-LLM gateways and FAQ: the
+[main README](https://github.com/shihabshahrier/freelm#readme) ·
+[Changelog](https://github.com/shihabshahrier/freelm/blob/main/CHANGELOG.md).
 
-| Provider | Key vars (first match wins) | Tier var |
-|----------|------------------------------|----------|
-| OpenRouter | `OPENROUTER_API_KEY` / `FREELM_OPENROUTER_KEYS` | `FREELM_OPENROUTER_TIER` |
-| Google AI Studio | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `FREELM_GOOGLE_KEYS` | `FREELM_GOOGLE_TIER` |
-| NVIDIA NIM | `NVIDIA_API_KEY` / `NIM_API_KEY` / `FREELM_NIM_KEYS` | `FREELM_NIM_TIER` |
-| Groq | `GROQ_API_KEY` / `FREELM_GROQ_KEYS` | `FREELM_GROQ_TIER` |
-| Cerebras | `CEREBRAS_API_KEY` / `FREELM_CEREBRAS_KEYS` | `FREELM_CEREBRAS_TIER` |
-| Mistral | `MISTRAL_API_KEY` / `FREELM_MISTRAL_KEYS` | `FREELM_MISTRAL_TIER` |
-
-Comma-separate to supply multiple keys per provider.
-
-## Virtual models & discovery
-
-Ask by intent — `"auto"`, `"chat:fast"`, `"chat:large"` — and freelm resolves each to a concrete model per provider. Free model ids churn, so freelm discovers them live from each provider's `/models` endpoint and caches them. List current free models:
-
-```ts
-import { listFreeModels } from "freelm";
-for (const m of (await listFreeModels()).slice(0, 5)) console.log(m.id, m.tags);
-```
-
-## How "always-up" works
-
-- **Key pool** per provider, rotated to spread load.
-- **Failover** interleaved across providers, so every provider is reached fast.
-- **Circuit breaker** per key — opens after repeated failures, half-opens after a cooldown.
-- **Retry classification**: `429` → cool the key & rotate; `5xx`/timeout → backoff; `401`/`402` → disable the key; model errors → next model.
-- **Quota guard**: per-key requests/minute + requests/day, skipping keys predicted exhausted.
-
-Inspect live state with `llm.health()`.
-
-## FAQ
-
-### How do I use free LLMs in Node.js or TypeScript?
-`npm install freelm` (Node ≥ 18, zero runtime dependencies), set one or more free API keys (OpenRouter, Google AI Studio, NVIDIA NIM, Groq, Cerebras, or Mistral) as environment variables, and call `await FreeLLM.fromEnv().text("...")`. freelm picks an available free model and handles rate limits and failover automatically.
-
-### Is there an OpenAI-compatible free LLM client for JavaScript?
-Yes — `import { OpenAI } from "freelm/compat"` is a drop-in for the OpenAI SDK (`client.chat.completions.create(...)`, including `stream: true`), backed by free-tier providers with automatic failover.
-
-### How do I avoid free-tier rate limits?
-freelm paces each key with a requests-per-minute token bucket plus a daily counter, skips keys predicted to be exhausted, and fails over across providers on `429`/`402`/`5xx`. Add more keys or providers to raise total throughput.
-
-### Is freelm really free?
-freelm itself is MIT-licensed. It runs on the providers' own free tiers (verified 2026-06) — actual limits depend on each provider's quota, and you can override them per provider.
-
-## License
-
-MIT © Shihab Shahriar Antor / [Shahriar Labs](https://shahriarlabs.com). Built by [Shihab Shahriar Antor](https://shihub.site). Python version: [pypi.org/project/freelm](https://pypi.org/project/freelm/).
+MIT © Shahriar Labs

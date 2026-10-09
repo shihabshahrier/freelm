@@ -3,8 +3,7 @@ import pytest
 import respx
 
 from conftest import ok_payload
-
-from freelm import FreeLLM, GoogleAIStudio, ModelSpec, NIM, NoProvidersAvailable, OpenRouter
+from freelm import NIM, BadRequest, FreeLLM, GoogleAIStudio, ModelSpec, NoProvidersAvailable, OpenRouter
 
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 G_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
@@ -79,13 +78,39 @@ def test_transient_then_recover_via_failover():
 
 
 @respx.mock
-def test_bad_request_raises_immediately():
-    respx.post(OR_URL).mock(return_value=httpx.Response(400, text="invalid temperature"))
-    llm = FreeLLM([OpenRouter("k1"), GoogleAIStudio("k2")])
-    with pytest.raises(Exception) as ei:
+def test_bad_request_rejected_by_two_providers_is_raised():
+    # a request every provider refuses is the caller's bug: surfaced after the
+    # second distinct provider rejects it, not after burning every key
+    orr = respx.post(OR_URL).mock(return_value=httpx.Response(400, text="invalid temperature"))
+    g = respx.post(G_URL).mock(return_value=httpx.Response(400, text="invalid temperature"))
+    llm = FreeLLM([OpenRouter("k1", discover=False), GoogleAIStudio("k2")])
+    with pytest.raises(BadRequest) as ei:
         llm.chat("hello")
-    # not model-related -> treated as caller bug, surfaced directly
+    assert ei.value.status == 400
+    assert orr.call_count == 1 and g.call_count == 1
+    assert llm.providers[0].keys[0].breaker.failures == 0  # a rejected request is not a sick key
+    llm.close()
+
+
+@respx.mock
+def test_bad_request_from_one_provider_fails_over():
+    # free tiers disagree on what they accept (params, moderation): one
+    # provider's 400 must not sink the call when another accepts it
+    respx.post(OR_URL).mock(return_value=httpx.Response(400, text="unsupported parameter: seed"))
+    respx.post(G_URL).mock(return_value=httpx.Response(200, json=ok_payload("from-google")))
+    with FreeLLM([OpenRouter("k1", discover=False), GoogleAIStudio("k2")]) as llm:
+        r = llm.chat("hello", seed=1)
+    assert r.provider == "google"
+
+
+@respx.mock
+def test_bad_request_single_provider_raises_its_error():
+    route = respx.post(OR_URL).mock(return_value=httpx.Response(400, text="invalid temperature"))
+    llm = FreeLLM([OpenRouter("k1", discover=False)])
+    with pytest.raises(BadRequest) as ei:
+        llm.chat("hello")
     assert "400" in str(ei.value)
+    assert route.call_count == 1  # the provider's other models are skipped
     llm.close()
 
 
@@ -162,8 +187,9 @@ def test_health_report():
 
 
 def test_free_guard_blocks_paid_passthrough():
-    from freelm import ConfigError
     import pytest as _pytest
+
+    from freelm import ConfigError
 
     llm = FreeLLM([OpenRouter("k", discover=False)])
     with _pytest.raises(ConfigError, match="free_only=False"):

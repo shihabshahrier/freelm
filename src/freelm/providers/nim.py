@@ -23,8 +23,13 @@ class NIM(Provider):
         "free": {"rpm": 40, "rpd": None},
     }
 
+    # meta/llama-3.x reached end of life 2026-08-26 (HTTP 410). These ids are
+    # in the live catalog as of 2026-10-09; retired ones get benched at runtime.
     DEFAULT_MODELS = [
-        ModelSpec("meta/llama-3.3-70b-instruct", ("chat", "large"), ctx=128000),
-        ModelSpec("meta/llama-3.1-70b-instruct", ("chat", "large"), ctx=128000),
-        ModelSpec("meta/llama-3.1-8b-instruct", ("chat", "small", "fast"), ctx=128000),
+        ModelSpec("nvidia/nemotron-3-super-120b-a12b", ("chat", "large", "tools", "reasoning")),
+        ModelSpec("deepseek-ai/deepseek-v4.1-flash", ("chat", "large", "tools")),
+        ModelSpec("z-ai/glm-5.3-flash", ("chat", "fast", "tools")),
+        ModelSpec("moonshotai/kimi-k2.6", ("chat", "large", "tools")),
+        ModelSpec("nvidia/nemotron-3.5-lightning-30b-a3b", ("chat", "small", "fast")),
+        ModelSpec("openai/gpt-oss-20b", ("chat", "small", "fast", "tools", "reasoning")),
     ]

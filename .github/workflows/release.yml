@@ -1,9 +1,15 @@
 name: Release
 
 # Publishes to PyPI when a GitHub Release is published (or run manually).
-# Set the repo secret PYPI_API_TOKEN (Settings -> Secrets -> Actions).
-# `skip-existing` makes re-runs idempotent — a version already on PyPI is skipped,
-# so the job stays green instead of failing on a duplicate.
+#
+# Auth, in order of preference:
+#   1. PyPI Trusted Publishing (OIDC) — no secret at all. One-time setup on
+#      pypi.org: project freelm -> Publishing -> add a GitHub publisher with
+#      owner=shihabshahrier, repo=freelm, workflow=release.yml, environment=pypi.
+#      Then delete the PYPI_API_TOKEN secret.
+#   2. Fallback: the PYPI_API_TOKEN repo secret. While it exists it is used;
+#      once it is deleted the action falls back to OIDC automatically.
+# `skip-existing` makes re-runs idempotent — a version already on PyPI is skipped.
 # Tests run first: a tagged-but-broken commit must not ship.
 
 on:
@@ -18,9 +24,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: pypi
+    permissions:
+      contents: read
+      id-token: write # PyPI Trusted Publishing (OIDC)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Test
@@ -31,8 +40,9 @@ jobs:
           pytest -q
       - name: Build
         run: |
-          python -m pip install --upgrade build
+          python -m pip install --upgrade build twine
           python -m build
+          twine check dist/*
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

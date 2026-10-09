@@ -5,18 +5,17 @@ build-backend = "hatchling.build"
 [project]
 name = "freelm"
 dynamic = ["version"]
-description = "Free LLM client + gateway: one always-up, OpenAI-compatible API (with streaming) over free-tier providers (OpenRouter, Google Gemini / AI Studio, NVIDIA NIM, Groq, Cerebras, Mistral) with automatic key rotation, cross-provider failover, circuit breaking, rate-limit/quota-aware routing, and live free-model discovery."
+description = "Free LLM API for Python: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM and Kilo, with automatic failover. CLI works with no keys."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Shihab Shahriar Antor", email = "shahriarlabs@gmail.com" }]
 keywords = [
-    "llm", "free-llm", "free llm api", "llm-gateway", "llm-router", "ai-gateway",
-    "openrouter", "gemini", "google-ai-studio", "nvidia-nim", "groq", "cerebras", "mistral",
-    "openai", "openai-compatible", "openai-api", "chatgpt", "claude", "gpt",
-    "failover", "fallback", "rate-limit", "circuit-breaker", "resilience",
-    "load-balancing", "model-router", "llm-api", "chatbot", "ai", "free",
-    "free-tier", "streaming", "model-discovery",
+    "llm", "free-llm", "free-llm-api", "free-ai-api", "llm-api", "llm-gateway", "llm-router",
+    "ai-gateway", "llm-proxy", "openai-proxy", "openai-compatible", "openai-api", "openai",
+    "openrouter", "gemini", "gemini-api", "google-ai-studio", "groq", "cerebras", "mistral",
+    "nvidia-nim", "kilo", "no-api-key", "failover", "fallback", "rate-limit", "circuit-breaker", "key-rotation",
+    "streaming", "tool-calling", "model-discovery", "cli",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -43,6 +42,7 @@ dev = ["pytest>=7", "respx>=0.20", "anyio>=4", "ruff>=0.4"]
 Homepage = "https://shihub.site/freelm"
 Documentation = "https://shihub.site/freelm/docs"
 Repository = "https://github.com/shihabshahrier/freelm"
+Changelog = "https://github.com/shihabshahrier/freelm/blob/main/CHANGELOG.md"
 Issues = "https://github.com/shihabshahrier/freelm/issues"
 
 [project.scripts]
@@ -54,6 +54,10 @@ path = "src/freelm/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/freelm"]
 
+[tool.hatch.build.targets.sdist]
+# explicit allow-list: never ship js/, local tool config, or anything untracked
+include = ["/src/freelm", "/tests", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproject.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
@@ -61,3 +65,10 @@ addopts = "-q"
 [tool.ruff]
 line-length = 120
 src = ["src", "tests"]
+target-version = "py39"
+
+[tool.ruff.lint]
+# Explicit rule set: ruff 0.16 widened its *default* selection, which turned
+# CI red overnight without a code change. Pinning the selection keeps lint
+# results stable across ruff upgrades.
+select = ["E4", "E7", "E9", "F", "I"]

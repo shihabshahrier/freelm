@@ -16,6 +16,6 @@ export class Mistral extends Provider {
   ];
 
   constructor(keys: string | string[], opts: ProviderOptions = {}) {
-    super(keys, { discover: true, ...opts });
+    super(keys, { discover: !opts.models, ...opts });
   }
 }

@@ -7,6 +7,9 @@ on:
   pull_request:
     paths: ["js/**", ".github/workflows/js-ci.yml"]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -16,13 +19,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["18", "20", "22"]
+        node-version: ["20", "22", "24"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Smoke-test the built package (ESM + CJS + CLI)
+        run: |
+          node --input-type=module -e "import { FreeLLM, serve } from './dist/index.js'; import { OpenAI } from './dist/compat/openai.js'; if (!FreeLLM || !serve || !OpenAI) process.exit(1)"
+          node -e "const a = require('./dist/index.cjs'); const c = require('./dist/compat/openai.cjs'); if (!a.FreeLLM || !c.OpenAI) process.exit(1)"
+          node bin/freelm.mjs --version

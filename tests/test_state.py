@@ -5,7 +5,6 @@ import pytest
 import respx
 
 from conftest import ok_payload
-
 from freelm import FreeLLM, OpenRouter
 from freelm._state import StateStore
 

@@ -21,41 +21,31 @@ class OpenRouter(Provider):
         "credit": {"rpm": 20, "rpd": 1000},    # >= $10 lifetime credit
     }
 
-    # Free model ids churn constantly; these were verified live 2026-06-07.
-    # Diverse upstreams are listed so a single upstream throttle still fails over.
+    # Free model ids churn constantly; these were listed as free in the public
+    # catalog on 2026-10-09 (diverse upstreams, so one throttle still fails over).
+    # Live discovery replaces this list at runtime.
     DEFAULT_MODELS = [
-        ModelSpec("openai/gpt-oss-120b:free", ("chat", "large"), ctx=131072),
-        ModelSpec("openai/gpt-oss-20b:free", ("chat", "small", "fast"), ctx=131072),
-        ModelSpec("meta-llama/llama-3.3-70b-instruct:free", ("chat", "large"), ctx=131072),
-        ModelSpec("z-ai/glm-4.5-air:free", ("chat", "large"), ctx=131072),
-        ModelSpec("qwen/qwen3-next-80b-a3b-instruct:free", ("chat", "large"), ctx=262144),
-        ModelSpec("meta-llama/llama-3.2-3b-instruct:free", ("chat", "small", "fast"), ctx=131072),
+        ModelSpec("google/gemma-4-31b-it:free", ("chat", "large", "tools", "vision"), ctx=262144),
+        ModelSpec("nvidia/nemotron-3-super-120b-a12b:free", ("chat", "large", "tools", "reasoning"), ctx=262144),
+        ModelSpec("google/gemma-4-26b-a4b-it:free", ("chat", "fast", "tools", "vision"), ctx=262144),
+        ModelSpec("nvidia/nemotron-3.5-lightning:free", ("chat", "fast", "tools"), ctx=1000000),
+        ModelSpec("poolside/laguna-s-2.1:free", ("chat", "tools"), ctx=262144),
+        ModelSpec("thinkingmachines/inkling-small:free", ("chat", "small", "fast", "tools", "vision"), ctx=1048576),
+        # OpenRouter's own router across whatever free models are up right now
+        ModelSpec("openrouter/free", ("chat",), ctx=200000),
     ]
 
     def __init__(self, keys, **kw):
-        # Optional attribution headers improve OpenRouter ranking; harmless if unset.
-        extra = {"X-Title": "freelm"}
+        # App attribution: OpenRouter lists apps that send a referer + title on
+        # openrouter.ai/apps and in each model's "Apps" tab. Override via extra_headers.
+        extra = {"HTTP-Referer": "https://github.com/shihabshahrier/freelm", "X-Title": "freelm"}
         extra.update(kw.pop("extra_headers", None) or {})
         # Free models churn constantly -> discover live by default, free-only.
-        kw.setdefault("discover", True)
+        kw.setdefault("discover", not kw.get("models"))  # an explicit models= list wins
         kw.setdefault("discover_free_only", True)
         # OpenRouter's catalog mixes paid and free models -> guard paid ids.
         kw.setdefault("free_only", True)
         super().__init__(keys, extra_headers=extra, **kw)
-
-    def _check_free(self, model_id: str) -> None:
-        if not self.free_only or model_id.endswith(":free"):
-            return
-        spec = next((m for m in self.models if m.id == model_id), None)
-        if spec is not None and spec.free:
-            return
-        from ..errors import ConfigError
-
-        raise ConfigError(
-            f"[openrouter] {model_id!r} is not a ':free' model. freelm is free-only "
-            "by default — pass OpenRouter(key, free_only=False) to allow paid ids "
-            "on your own account."
-        )
 
     def rate_limit_scope(self, body: str) -> str:
         b = (body or "").lower()
@@ -63,5 +53,5 @@ class OpenRouter(Provider):
         # a bare "temporarily" also appears in account-wide 429s, which must cool
         # the key instead of hammering it with the next model.
         if "rate-limited upstream" in b:
-            return "model"
+            return "upstream"  # the free model is throttled for everyone, not just this key
         return "key"

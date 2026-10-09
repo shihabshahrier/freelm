@@ -1,0 +1,19 @@
+# never bake keys or local state into the image
+.env
+.env.*
+!.env.example
+.git
+.github
+.venv
+venv
+js
+tests
+examples
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.claude
+dist
+build
+*.egg-info

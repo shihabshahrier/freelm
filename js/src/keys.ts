@@ -3,6 +3,8 @@ import { CircuitBreaker } from "./breaker.js";
 import { TokenBucket } from "./ratelimit.js";
 
 export const DAY = 86400.0;
+/** Placeholder "key" for keyless providers (no Authorization header is sent). */
+export const ANONYMOUS = "anonymous";
 /** Stand-in for "unlimited" daily quota so it ranks high but stays finite/comparable. */
 export const UNLIMITED = 100_000.0;
 
@@ -14,8 +16,12 @@ export class KeyState {
   rpdReset = 0;
   cooldownUntil = 0;
   disabled = false;
+  disabledSinceWall = 0; // wall-clock ts it was disabled (persistence TTL)
   ewmaLatency = 0;
   lastError: string | null = null;
+  /** model id -> monotonic ts until which this key must not use that model
+   * (its own per-model quota hit, no access to the model, ...). */
+  modelUntil = new Map<string, number>();
 
   constructor(public key: string, public tier = "free") {}
 
@@ -63,9 +69,38 @@ export class KeyState {
     return waits.length ? Math.max(...waits) : 0;
   }
 
+  benchModel(model: string, until: number): void {
+    this.modelUntil.set(model, Math.max(until, this.modelUntil.get(model) ?? 0));
+  }
+
+  modelWait(model: string, now: number): number {
+    const until = this.modelUntil.get(model);
+    if (until === undefined) return 0;
+    if (now >= until) {
+      this.modelUntil.delete(model);
+      return 0;
+    }
+    return until - now;
+  }
+
+  modelReady(model: string, now: number): boolean {
+    return this.modelWait(model, now) === 0;
+  }
+
   masked(): string {
     const k = this.key;
+    if (k === ANONYMOUS) return "(keyless)";
     return k.length > 12 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "***";
+  }
+
+  /** Never put the raw key in logs: console.log / util.inspect / JSON.stringify
+   * of a KeyState (or of an error's attempts) show the masked key only. */
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return `KeyState { key: '${this.masked()}', tier: '${this.tier}', disabled: ${this.disabled}, rpdUsed: ${this.rpdUsed}, lastError: ${JSON.stringify(this.lastError)} }`;
+  }
+
+  toJSON(): Record<string, unknown> {
+    return { key: this.masked(), tier: this.tier, disabled: this.disabled, rpdUsed: this.rpdUsed, lastError: this.lastError };
   }
 }
 

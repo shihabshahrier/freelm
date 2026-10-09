@@ -30,7 +30,9 @@ same commit, with tests in both.** File mapping is 1:1:
 | `compat/openai.py` + `types_compat.py` | `compat/openai.ts` |
 | `_state.py`             | `state.ts`             |
 | `_cli.py` + `__main__.py` | `cli.ts` (+ `bin/freelm.mjs`) |
+| `server.py`             | `server.ts`            |
 | `_version.py`           | `version.ts`           |
+| —                       | `runtime.ts` (TS-only: env / Node built-ins without static `node:` imports) |
 
 ## Commands
 
@@ -40,15 +42,16 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest -q                      # tests
 .venv/bin/ruff check src tests examples  # lint (CI-enforced)
 
-# TypeScript (Node >= 18)
+# TypeScript (Node >= 20)
 cd js && npm ci
 npm test            # vitest
 npm run typecheck   # tsc --noEmit
 npm run build       # tsup -> dist/ (esm+cjs+dts)
 ```
 
-Live smoke test (needs real keys in env, never hardcoded):
-`examples/e2e_smoke.py` / `js/examples/e2e.mjs`.
+Live smoke test (needs real keys in env, never hardcoded): run `freelm doctor`
+first (which keys work today), then `examples/e2e_smoke.py` /
+`js/examples/e2e.mjs`.
 
 ## Architecture (both languages)
 
@@ -61,13 +64,36 @@ Live smoke test (needs real keys in env, never hardcoded):
   (rank 0 of every provider before any rank 1), skip `tried`, `reserve()` a
   token, fire, classify the outcome, repeat up to `max_attempts` within a
   `timeout` deadline.
-- **Error taxonomy** (`classify()`): 401/403 `AuthError` and 402
-  `QuotaExhausted` → disable key, fail over; 429 `RateLimited` → cool key
-  (or, if model-scoped per `rate_limit_scope`, keep key hot and try the next
-  model); 408/5xx `Transient` → breaker + backoff; 404 or 400/422 mentioning
-  "model" `ModelNotFound` → refund the daily slot, next model; any other 4xx
-  → caller bug, raise immediately. Exhaustion raises `NoProvidersAvailable`
-  with the attempt list.
+- **Error taxonomy** (`classify()`) — *no status aborts a call on its own*:
+  401/403 (and 400 "API key not valid"/location errors) `AuthError` and 402
+  `QuotaExhausted` → disable key, fail over (a 402 naming the model benches
+  the model instead); 429 `RateLimited` → cool key, or if model-scoped per
+  `rate_limit_scope` (Gemini, Groq: per-model quotas) bench just the model;
+  408/409/425/any 5xx `Transient` → breaker + backoff, or if model-scoped per
+  `transient_scope` (Gemini "high demand") bench the model; 404/410 and
+  400/422 "decommissioned/no longer..." `ModelNotFound(gone=True)` → bench the
+  model for an hour (capability 404s like "no endpoints support tool use" are
+  `gone=False`); 413 / "context too long" / other 400s mentioning "model" →
+  `ModelNotFound(gone=False)`, next model; any other 4xx (incl. OpenRouter
+  moderation 403) → `BadRequest`: skip that *provider*, no breaker penalty,
+  and raise only once 2 distinct providers rejected the request (or every
+  attempt was a rejection). `{"error": ...}` bodies/SSE frames delivered with
+  HTTP 200 are classified like the status they carry. Exhaustion raises
+  `NoProvidersAvailable(attempts, status)` with one explanation line per
+  provider.
+- **Model benching** has two levels: provider-wide (`Provider.bench_model`,
+  for causes that hit everyone — retired 410/"end of life", OpenRouter
+  `rate_limit_scope == "upstream"`, model-scoped overload 5xx) and per key
+  (`KeyState.bench_model`, for that account's per-model quota — scope
+  `"model"` 429s on Gemini/Groq/OVH — "no access" 404s and 402s naming the
+  model). Benched candidates keep their rank slot in `order_candidates` and
+  are skipped in `select_candidate` — dropping them would let a provider full
+  of dead models monopolise rank 0 and starve the interleave. `soonest_wait`
+  works over candidates (key wait vs. both bench levels) so `wait=True` also
+  waits out per-model quotas.
+- **Concrete-id routing**: a non-virtual id goes only to providers whose model
+  list contains it; an id nobody lists passes through to all. The free guard
+  skips its provider (ConfigError only if nothing else can serve).
 - **Virtual models** (`registry`): `auto`/`chat`/`large`/`fast`/`small` plus
   capability tags `tools`/`vision`/`reasoning` (+ `chat:<tag>`); anything whose
   base isn't a known alias passes through verbatim — including ids with `:`
@@ -75,33 +101,63 @@ Live smoke test (needs real keys in env, never hardcoded):
   Resolution order = `ModelSpec.priority` (stable), then provider `prefer=`
   patterns; `Provider.resolve_models` also accepts a *list* of aliases (per-call
   fallback chain, deduped in order).
-- **Free guard**: OpenRouter defaults `free_only=True` and raises `ConfigError`
-  from its `_check_free` hook for non-`:free` passthrough ids. Other providers
-  keep the hook a no-op (their whole account is free-tier).
+- **Free guard**: providers with `free_only=True` (OpenRouter, Kilo) reject a
+  concrete id unless it is `:free` or listed free (`ModelSpec.free`, from
+  discovery: `:free`, Kilo `isFree`, or zero pricing). Aliases never resolve to
+  a paid model there. Other providers keep `free_only=False` (whole account is
+  free-tier).
+- **Keyless providers** (`Kilo`, `OVHcloud`; `keyless = True`, placeholder key
+  `ANONYMOUS` → no Authorization header, masked as `(keyless)`): the library
+  adds them only on request (`keyless=True|"auto"`, `FREELM_KEYLESS`); the CLI
+  defaults to `auto` (only when no keys are set) and prints a notice. Never
+  route prompts to them silently. OVHcloud never takes a key (paid there).
 - **Events**: clients accept `on_event`/`onEvent`; emit kinds
   `attempt|success|error|wait|discovery`, masked keys only, and swallow callback
   exceptions.
 - **Persistence** (`_state.py`/`state.ts`): opt-in (`persist=`/`FREELM_PERSIST`),
   one JSON schema shared by both languages (`provider:sha256(key)[:12]` →
   rpd/cooldown/disabled with wall-clock timestamps). Never write raw keys.
-- **CLI** (`_cli.py`/`cli.ts`): stdlib/zero-dep only; commands
-  `chat|models|health`; config errors exit 2, other freelm errors exit 1.
-- **Discovery:** providers with `discover=True` (all except Google and NIM)
+- **CLI** (`_cli.py`/`cli.ts`): stdlib/zero-dep only (argparse /
+  `util.parseArgs`); commands `chat|models|health|doctor|serve`; config/usage
+  errors exit 2, other freelm errors exit 1. `doctor` sends one tiny chat per
+  key (`/models` returns 200 for dead keys on several providers, so it can't be
+  trusted) and prints a fix + signup link per failure; the provider table
+  (`PROVIDER_ENV`) lives in `config`.
+- **Discovery:** providers with `discover=True` (all except Google and NIM; an
+  explicit `models=[...]` turns it off)
   fetch `GET /models` on first use; resolution is live → disk cache
   (`~/.cache/freelm`, TTL 1 h, 0600) → hardcoded `DEFAULT_MODELS` fallback. A
   cached list yielding zero usable specs must fall through to a live fetch.
-- **Streaming:** SSE deltas; failover only before the first token; success
-  records time-to-first-token into the latency EWMA. `apply_success` ignores
-  latency samples <= 0 — keep it that way.
-- **TS timeouts:** `fetch` doesn't bound body reads, so `client.ts` re-arms an
-  AbortController per phase (headers / body / each stream chunk) and discovery
-  uses `AbortSignal.timeout(15_000)`. Don't simplify back to a single timer
-  cleared after the headers.
+- **Streaming:** one SSE decoder per language (`_SSE` / `SSE`: comments,
+  multi-line `data:`, CR/LF/CRLF, `[DONE]` ends the stream). The core yields
+  raw `chat.completion.chunk` dicts (`stream_chunks`/`astream_chunks`/
+  `streamChunks`); `stream()` maps them to text. Failover only before the
+  first output (raw mode holds role-only preambles back); success records
+  time-to-first-token into the latency EWMA. `apply_success` ignores latency
+  samples <= 0 — keep it that way.
+- **`serve`**: zero-dep OpenAI-compatible endpoint. Python: stdlib
+  `ThreadingHTTPServer`, every request handed to one `AsyncFreeLLM` on a
+  private loop thread (single-loop safety). TS: `node:http` loaded via
+  `runtime.builtin()`; client disconnects abort upstream through `signal`.
+- **TS timeouts:** `fetch` doesn't bound body reads. Non-stream: one timer
+  spans headers *and* body, bounded by the call's remaining deadline. Streams:
+  a headers timer, then each `reader.read()` raced against an inactivity timer
+  that runs **only while waiting on the network** — never while the consumer
+  holds a yielded chunk (that hung forever before 0.4). Timers are `unref`'d.
+  Discovery uses `AbortSignal.timeout(10_000)`. Caller `signal` is linked into
+  every fetch and surfaces as an AbortError without penalising the key.
+- **TS runtime portability:** no static `node:` imports in library code —
+  `runtime.ts` reads `process.env` and Node built-ins via
+  `process.getBuiltinModule`, so the package bundles for Workers/edge/browsers
+  (disk cache + persistence silently off there). Only `cli.ts` imports `node:`
+  modules directly.
 
 ## Conventions
 
 - Dependencies: Python runtime dep is httpx only; TS has **zero** runtime deps.
   Don't add any without strong reason.
+- Lint: ruff's rule set is pinned in `pyproject.toml` (`select = E4,E7,E9,F,I`)
+  — ruff 0.16 widened its defaults and broke CI without a code change.
 - Free-only policy: paid-only providers are out of scope (xAI Grok explicitly
   rejected; Groq `gsk_…` is the supported one).
 - Secrets: keys come from env (see `.env.example`); never logged or committed.
@@ -118,9 +174,16 @@ Live smoke test (needs real keys in env, never hardcoded):
 
 ## Release
 
+- Versions are aligned since 0.4.0 (Python and npm ship the same number).
 - Python: bump `_version.py`, update CHANGELOG, publish a GitHub Release
-  (tag `v*`) → `release.yml` tests then uploads to PyPI (`PYPI_API_TOKEN`).
+  (tag `v*`) → `release.yml` tests then uploads to PyPI. Auth: PyPI Trusted
+  Publishing (OIDC, environment `pypi`) once configured on pypi.org; until
+  then the `PYPI_API_TOKEN` secret.
 - JS: bump `js/package.json` **and** `js/src/version.ts`, push tag `js-v*`
-  → `npm-release.yml` builds, tests, publishes with provenance (`NPM_TOKEN`).
-- CI: `ci.yml` (Python 3.9–3.14, ruff + pytest), `js-ci.yml` (Node 18/20/22,
-  tsc + vitest + build; path-filtered to `js/**`).
+  → `npm-release.yml` builds, tests, publishes with provenance. Auth: npm
+  Trusted Publishing (OIDC, npm >= 11.5.1) once configured on npmjs.com; the
+  `NPM_TOKEN` fallback must be rotated (npm write tokens expire <= 90 days).
+- Docker: `docker.yml` builds `ghcr.io/shihabshahrier/freelm` (`freelm serve`,
+  amd64+arm64) on `v*` tags with the built-in `GITHUB_TOKEN`.
+- CI: `ci.yml` (Python 3.9–3.14, ruff + pytest), `js-ci.yml` (Node 20/22/24,
+  tsc + vitest + build + ESM/CJS/CLI smoke; path-filtered to `js/**`).

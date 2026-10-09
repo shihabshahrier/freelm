@@ -1,11 +1,16 @@
 name: npm Release
 
-# Publishes the js/ package to npm when a `js-v*` tag is pushed (e.g. js-v0.1.1),
+# Publishes the js/ package to npm when a `js-v*` tag is pushed (e.g. js-v0.3.0),
 # or on manual dispatch. Version comes from js/package.json. Idempotent: skips if
 # that version is already on npm, so re-runs stay green.
 #
-# Setup once: add the repo secret NPM_TOKEN (an npm Automation or Granular token
-# with publish/2FA-bypass). See README. Provenance uses GitHub OIDC (public repo).
+# Auth, in order of preference:
+#   1. npm Trusted Publishing (OIDC) — no token at all. One-time setup on
+#      npmjs.com: package freelm -> Settings -> Trusted Publisher -> GitHub
+#      Actions with user=shihabshahrier, repo=freelm, workflow=npm-release.yml.
+#      Needs npm CLI >= 11.5.1 (installed below). Provenance is automatic.
+#   2. Fallback: the NPM_TOKEN repo secret (granular write tokens now expire
+#      after at most 90 days, so this needs periodic rotation — prefer 1).
 
 on:
   push:
@@ -14,7 +19,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # for npm provenance
+  id-token: write # npm Trusted Publishing + provenance (OIDC)
 
 jobs:
   publish:
@@ -23,12 +28,15 @@ jobs:
       run:
         working-directory: js
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: Upgrade npm (trusted publishing needs >= 11.5.1)
+        run: npm install -g npm@^11.5.1
       - run: npm ci
+      - run: npm run typecheck
       - run: npm run build
       - run: npm test
       - name: Publish to npm (skip if version exists)

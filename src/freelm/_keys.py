@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
 from ._breaker import CircuitBreaker
 from ._ratelimit import TokenBucket
 
 DAY = 86400.0
+# Placeholder "key" for keyless providers (no Authorization header is sent).
+ANONYMOUS = "anonymous"
 # stand-in for "unlimited" daily quota so it ranks high but stays finite/comparable
 UNLIMITED = 100_000.0
 
 
 @dataclass
 class KeyState:
-    key: str
+    key: str = field(repr=False)  # never in reprs/tracebacks — see __repr__
     tier: str = "free"
     breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     bucket: Optional[TokenBucket] = None
@@ -23,8 +25,28 @@ class KeyState:
     rpd_reset: float = 0.0              # monotonic ts at which the daily counter rolls
     cooldown_until: float = 0.0
     disabled: bool = False              # hard-off after auth failure
+    disabled_since_wall: float = 0.0    # wall-clock ts it was disabled (persistence TTL)
     ewma_latency: float = 0.0
     last_error: Optional[str] = None
+    # model id -> monotonic ts until which this key must not use that model
+    # (its own per-model quota hit, no access to the model, ...)
+    model_until: Dict[str, float] = field(default_factory=dict, repr=False)
+
+    # -- per-model benches (this key only) ------------------------------
+    def bench_model(self, model: str, until: float) -> None:
+        self.model_until[model] = max(until, self.model_until.get(model, 0.0))
+
+    def model_wait(self, model: str, now: float) -> float:
+        until = self.model_until.get(model)
+        if until is None:
+            return 0.0
+        if now >= until:
+            del self.model_until[model]
+            return 0.0
+        return until - now
+
+    def model_ready(self, model: str, now: float) -> bool:
+        return self.model_wait(model, now) == 0.0
 
     # -- daily window ----------------------------------------------------
     def _roll_daily(self, now: float) -> None:
@@ -86,7 +108,15 @@ class KeyState:
 
     def masked(self) -> str:
         k = self.key
+        if k == ANONYMOUS:
+            return "(keyless)"
         return (k[:6] + "..." + k[-4:]) if len(k) > 12 else "***"
+
+    def __repr__(self) -> str:
+        return (
+            f"KeyState(key={self.masked()!r}, tier={self.tier!r}, disabled={self.disabled}, "
+            f"rpd_used={self.rpd_used}, last_error={self.last_error!r})"
+        )
 
 
 def new_key_state(key: str, *, tier: str, rpm: Optional[float], rpd: Optional[int]) -> KeyState:
