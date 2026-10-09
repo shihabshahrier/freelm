@@ -107,16 +107,20 @@ class KeyState:
         return max(waits) if waits else 0.0
 
     def masked(self) -> str:
-        k = self.key
-        if k == ANONYMOUS:
-            return "(keyless)"
-        return (k[:6] + "..." + k[-4:]) if len(k) > 12 else "***"
+        return mask_key(self.key)
 
     def __repr__(self) -> str:
         return (
             f"KeyState(key={self.masked()!r}, tier={self.tier!r}, disabled={self.disabled}, "
             f"rpd_used={self.rpd_used}, last_error={self.last_error!r})"
         )
+
+
+def mask_key(key: str) -> str:
+    """How a key is shown anywhere (events, health, errors, doctor) — never raw."""
+    if key == ANONYMOUS:
+        return "(keyless)"
+    return (key[:6] + "..." + key[-4:]) if len(key) > 12 else "***"
 
 
 def new_key_state(key: str, *, tier: str, rpm: Optional[float], rpd: Optional[int]) -> KeyState:

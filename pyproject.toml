@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "freelm"
 dynamic = ["version"]
-description = "Free LLM API for Python: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM and Kilo, with automatic failover. CLI works with no keys."
+description = "Free LLM API for Python: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral, NVIDIA NIM and Kilo, with automatic failover. CLI works with no keys."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -14,7 +14,7 @@ keywords = [
     "llm", "free-llm", "free-llm-api", "free-ai-api", "llm-api", "llm-gateway", "llm-router",
     "ai-gateway", "llm-proxy", "openai-proxy", "openai-compatible", "openai-api", "openai",
     "openrouter", "gemini", "gemini-api", "google-ai-studio", "groq", "cerebras", "mistral",
-    "nvidia-nim", "kilo", "no-api-key", "failover", "fallback", "rate-limit", "circuit-breaker", "key-rotation",
+    "nvidia-nim", "cohere", "cloudflare-workers-ai", "zai", "glm", "kilo", "no-api-key", "failover", "fallback", "rate-limit", "circuit-breaker", "key-rotation",
     "streaming", "tool-calling", "model-discovery", "cli",
 ]
 classifiers = [

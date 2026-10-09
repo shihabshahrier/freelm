@@ -7,6 +7,9 @@ import { ANONYMOUS, KeyState, newKeyState } from "../keys.js";
 import { ModelSpec, resolveModels } from "../registry.js";
 import { ChatResponse, Choice, usageFrom } from "../types.js";
 
+/** Workers AI sometimes sends a numeric token as a JSON number (`"content": 6`). */
+const asText = (v: any) => (typeof v === "number" ? String(v) : v);
+
 export interface TierLimit {
   rpm: number | null;
   rpd: number | null;
@@ -82,6 +85,12 @@ export class Provider {
     this.cacheTtl = opts.cacheTtl ?? null;
     this.models = opts.models ? [...opts.models] : [...cls.defaultModels];
     this.keys = keyList.map((k) => newKeyState(k, this.tier, this.rpm, this.rpd));
+  }
+
+  /** Last look at the OpenAI-style request body before it is sent, for this
+   * provider's quirks (default: unchanged). */
+  adaptPayload(body: Record<string, any>): Record<string, any> {
+    return body;
   }
 
   get url(): string {
@@ -219,7 +228,7 @@ export class Provider {
       index: c.index ?? 0,
       message: {
         role: c.message?.role ?? "assistant",
-        content: c.message?.content ?? null,
+        content: asText(c.message?.content) ?? null,
         tool_calls: c.message?.tool_calls ?? null,
       },
       finish_reason: c.finish_reason ?? null,

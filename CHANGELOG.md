@@ -3,6 +3,49 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added — three more free providers
+- **Cloudflare Workers AI** (`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`):
+  10,000 Neurons/day free on every account (a few hundred chats), with curated
+  Free-plan `@cf/...` models — Llama 4 Scout, Mistral Small 3.1, gpt-oss,
+  Qwen 3.8, Gemma 4, GLM-4.7-Flash, Llama 3.3 70B. The account id is part of
+  the endpoint, so `CloudflareWorkersAI(token, account_id=...)` /
+  `{ accountId }` requires it; from the environment, a token without one is
+  skipped with a notice (and `freelm doctor` says what's missing) instead of
+  failing the whole setup. Requests carry `max_tokens: 4096` unless you set one
+  (many Workers AI models otherwise stop at 256 tokens), and a spent daily
+  allowance rests the key for an hour instead of being retried every minute.
+- **Z.ai** (`ZAI_API_KEY`): GLM-4.7-Flash, GLM-4.5-Flash and GLM-4.6V-Flash
+  (vision) — Z.ai's free models. Every other GLM model is billed against the
+  account balance, so the provider is free-only with an explicit list: a paid id
+  is refused (`ConfigError`) instead of spending credit.
+- **Cohere** (`COHERE_API_KEY` or `CO_API_KEY`) through its OpenAI compatibility
+  API: Command A+, Command A (incl. Reasoning and Vision) and Command R7B on a
+  free trial key (20 requests/minute per model, 1,000 calls/month,
+  non-commercial use). A per-minute 429 benches just that model; the monthly
+  cap disables the key.
+- `freelm.config.build_provider()` / `buildProvider()` builds one provider from
+  the environment and `env_vars()` / `envVars()` lists the variables it needs;
+  `ProviderEnv.option_vars` / `optionVars` map extra constructor options to env
+  vars. `freelm doctor` now prints every variable a provider needs
+  (`export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...`) and shows
+  Cloudflare's error messages.
+- `Provider.adapt_payload()` / `adaptPayload()`: a hook to adjust the request
+  body for a provider's quirks (used by Cloudflare for `max_tokens`).
+
+### Fixed
+- **Quota 429s no longer hammer a spent key every minute.** A 429 that says the
+  quota is gone for the day (Cloudflare's daily Neurons, OpenRouter's
+  `free-models-per-day`) and gives no retry time now rests the key for an hour;
+  one that says it's gone for the month (Cohere trial keys) disables the key,
+  like a 402.
+- A 403 saying a model needs a paid plan (Cloudflare's Workers Paid-only
+  models) benches that model for the key instead of disabling the key, and a
+  400 "no such model" benches the model instead of retrying it on every call.
+- A numeric token sent as a JSON number (`"content": 6`, seen from Workers AI)
+  is kept as text — `stream()` used to drop it silently.
+
 ## [0.4.0] - 2026-10-09
 
 Python and the JS/TS package both move to 0.4.0 (versions are aligned from now on).

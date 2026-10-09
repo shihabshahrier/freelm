@@ -8,3 +8,7 @@ export { Cerebras } from "./cerebras.js";
 export { Mistral } from "./mistral.js";
 export { Kilo } from "./kilo.js";
 export { OVHcloud } from "./ovh.js";
+export { ZAI } from "./zai.js";
+export { Cohere } from "./cohere.js";
+export { CloudflareWorkersAI } from "./cloudflare.js";
+export type { CloudflareOptions } from "./cloudflare.js";

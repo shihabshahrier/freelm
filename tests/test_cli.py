@@ -4,19 +4,13 @@ import respx
 
 from conftest import ok_payload
 from freelm._cli import main
+from freelm.config import PROVIDER_ENV
 
 OR_CHAT = "https://openrouter.ai/api/v1/chat/completions"
 OR_MODELS = "https://openrouter.ai/api/v1/models"
 
-_ALL_KEY_VARS = (
-    "OPENROUTER_API_KEY", "FREELM_OPENROUTER_KEYS",
-    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_STUDIO_KEY", "FREELM_GOOGLE_KEYS",
-    "NVIDIA_API_KEY", "NIM_API_KEY", "FREELM_NIM_KEYS",
-    "GROQ_API_KEY", "FREELM_GROQ_KEYS",
-    "CEREBRAS_API_KEY", "FREELM_CEREBRAS_KEYS",
-    "MISTRAL_API_KEY", "FREELM_MISTRAL_KEYS",
-    "KILO_API_KEY", "FREELM_KILO_KEYS",
-)
+# every variable from_env() reads, so a developer's real env can't leak into a test
+_ALL_KEY_VARS = [v for s in PROVIDER_ENV for v in (*s.key_vars, *(n for _, names in s.option_vars for n in names))]
 
 
 @pytest.fixture(autouse=True)
@@ -156,3 +150,30 @@ def test_doctor_tests_keys_live_even_with_persisted_state(monkeypatch, tmp_path,
     assert main(["doctor"]) == 0
     assert route.call_count == 1  # the saved "disabled" flag didn't short-circuit the check
     assert "OK" in capsys.readouterr().out
+
+
+def test_doctor_explains_a_cloudflare_token_without_account_id(monkeypatch, capsys):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token-abcdefghijkl")
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.strip().startswith("cloudflare"))
+    assert "FAIL" in line and "CLOUDFLARE_ACCOUNT_ID" in line
+    assert "cf-token-abcdefghijkl" not in out  # masked
+
+
+def test_doctor_lists_every_variable_a_provider_needs(capsys):
+    assert main(["doctor"]) == 2  # nothing configured
+    assert "export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=..." in capsys.readouterr().out
+
+
+@respx.mock
+def test_doctor_shows_cloudflare_error_messages(monkeypatch, capsys):
+    acct = "0123456789abcdef0123456789abcdef"
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token-abcdefghijkl")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", acct)
+    respx.post(f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"result": None, "success": False, "messages": [],
+                                               "errors": [{"code": 10000, "message": "Authentication error"}]}))
+    assert main(["doctor"]) == 1
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if ln.strip().startswith("cloudflare"))
+    assert "key rejected (401): Authentication error" in line

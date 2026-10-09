@@ -11,7 +11,7 @@
  */
 import { parseArgs } from "node:util";
 import { FreeLLM } from "./client.js";
-import { KEYLESS, PROVIDER_ENV, envKeys, keylessMode, providersFromEnv } from "./config.js";
+import { KEYLESS, PROVIDER_ENV, buildProvider, envKeys, envVars, keylessMode, providersFromEnv } from "./config.js";
 import { discover } from "./discovery.js";
 import {
   AuthError,
@@ -24,6 +24,7 @@ import {
   RateLimited,
   Transient,
 } from "./errors.js";
+import { maskKey } from "./keys.js";
 import { env } from "./runtime.js";
 import { STRATEGIES, Strategy } from "./strategy.js";
 import { VERSION } from "./version.js";
@@ -116,6 +117,8 @@ function short(e: any): string {
   try {
     let obj = JSON.parse(msg);
     if (Array.isArray(obj) && obj.length) obj = obj[0];
+    // Cloudflare: {"errors": [{"code": ..., "message": ...}]}
+    if (obj && Array.isArray(obj.errors) && obj.errors.length) obj = obj.errors[0];
     if (obj && typeof obj === "object") {
       const err = obj.error ?? obj;
       if (err && typeof err === "object") msg = err.message ?? err.detail ?? err.title ?? msg;
@@ -171,14 +174,21 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   if (haveKeys) say(`freelm ${VERSION} doctor — ${configured.reduce((a, [, k]) => a + k.length, 0)} key(s), one tiny request each\n`);
   else {
     say("no provider keys found in the environment. Free keys (no credit card needed for most):\n");
-    for (const s of missing) say(`  ${s.name.padEnd(11)} export ${s.keyVars[0]}=...   ${s.signupUrl}`);
+    for (const s of missing) say(`  ${s.name.padEnd(11)} export ${envVars(s).map((v) => `${v}=...`).join(" ")}   ${s.signupUrl}`);
     say("\nSet one or more, then run `freelm doctor` again.");
   }
   const line = (r: Record<string, any>) => `  ${r.provider.padEnd(11)} ${String(r.key).padEnd(16)} ${r.status.padEnd(4)}  ${r.detail}`;
   const rows: Record<string, any>[] = [];
   for (const [spec, keys] of configured) {
     for (const key of keys) {
-      const row = await check(new spec.cls([key], { tier: env(spec.tierVar) ?? "free" }), spec.signupUrl, timeout);
+      let row: Record<string, any>;
+      try {
+        row = await check(buildProvider(spec, [key]), spec.signupUrl, timeout);
+      } catch (e) {
+        if (!(e instanceof ConfigError)) throw e;
+        // e.g. a Cloudflare token without its account id
+        row = { provider: spec.name, key: maskKey(key), model: null, latency_ms: null, status: "FAIL", works: false, detail: e.message };
+      }
       rows.push(row);
       say(line(row));
     }
@@ -201,7 +211,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   else {
     if (haveKeys && missing.length) {
       say("\nnot configured (more free capacity, more failover):");
-      for (const s of missing) say(`  ${s.name.padEnd(11)} ${s.keyVars[0].padEnd(22)} ${s.signupUrl}`);
+      for (const s of missing) say(`  ${s.name.padEnd(11)} ${envVars(s).join(" + ").padEnd(22)} ${s.signupUrl}`);
     }
     const ready = [...new Set([...working, ...keylessOk].map((r) => r.provider))].sort();
     const parts = [rows.length ? `${working.length} of ${rows.length} key(s) working` : "no keys configured"];

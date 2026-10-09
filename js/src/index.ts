@@ -1,8 +1,8 @@
 export { FreeLLM } from "./client.js";
 export type { FreeLLMOptions, ChatOptions } from "./client.js";
-export { Provider, OpenRouter, GoogleAIStudio, Gemini, NIM, Groq, Cerebras, Mistral, Kilo, OVHcloud } from "./providers/index.js";
-export type { ProviderOptions, TierLimit } from "./providers/index.js";
-export { providersFromEnv, PROVIDER_ENV, envKeys, KEYLESS, keylessMode } from "./config.js";
+export { Provider, OpenRouter, GoogleAIStudio, Gemini, NIM, Groq, Cerebras, Mistral, Kilo, OVHcloud, ZAI, Cohere, CloudflareWorkersAI } from "./providers/index.js";
+export type { ProviderOptions, TierLimit, CloudflareOptions } from "./providers/index.js";
+export { providersFromEnv, PROVIDER_ENV, envKeys, envVars, buildProvider, KEYLESS, keylessMode } from "./config.js";
 export type { ProviderEnv, KeylessArg } from "./config.js";
 export { listFreeModels, toSpecs, discover } from "./discovery.js";
 export { modelSpec, resolveModels, isVirtual } from "./registry.js";

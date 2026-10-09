@@ -4,8 +4,8 @@
 [![CI](https://github.com/shihabshahrier/freelm/actions/workflows/js-ci.yml/badge.svg)](https://github.com/shihabshahrier/freelm/actions/workflows/js-ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/shihabshahrier/freelm/blob/main/LICENSE)
 
-**freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cerebras, Mistral and NVIDIA NIM into one
-OpenAI-compatible LLM — in your TypeScript code, or as a local `/v1` endpoint for any tool (`npx freelm serve`).**
+**freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral and
+NVIDIA NIM into one OpenAI-compatible LLM — in your TypeScript code, or as a local `/v1` endpoint for any tool (`npx freelm serve`).**
 It rotates your keys, fails over across providers on rate limits, outages and retired models, and discovers which
 models are free today. Zero dependencies, ESM + CommonJS, your own keys called directly.
 
@@ -96,6 +96,9 @@ for await (const chunk of stream) process.stdout.write(chunk.choices[0].delta.co
 | Google AI Studio | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `FREELM_GOOGLE_KEYS` |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) | `GROQ_API_KEY` / `FREELM_GROQ_KEYS` |
 | OpenRouter (`:free` models) | [openrouter.ai/keys](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` / `FREELM_OPENROUTER_KEYS` |
+| Cloudflare Workers AI (10,000 Neurons/day) | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` / `FREELM_CLOUDFLARE_KEYS` **+** `CLOUDFLARE_ACCOUNT_ID` |
+| Z.ai (free GLM Flash models only, guarded) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` / `FREELM_ZAI_KEYS` |
+| Cohere (trial key: free, non-commercial) | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` / `CO_API_KEY` / `FREELM_COHERE_KEYS` |
 | Kilo Gateway (works keyless) | [app.kilo.ai](https://app.kilo.ai) | `KILO_API_KEY` / `FREELM_KILO_KEYS` (optional) |
 | OVHcloud AI Endpoints | none — anonymous only | — |
 | Cerebras (trial credits, no longer permanently free) | [cloud.cerebras.ai](https://cloud.cerebras.ai) | `CEREBRAS_API_KEY` / `FREELM_CEREBRAS_KEYS` |

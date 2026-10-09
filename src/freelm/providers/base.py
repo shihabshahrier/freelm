@@ -15,6 +15,11 @@ from ..errors import ConfigError
 from ..registry import ModelSpec, resolve_models
 
 
+def _as_text(v: Any) -> Any:
+    """Workers AI sometimes sends a numeric token as a JSON number (``"content": 6``)."""
+    return str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+
 class Provider:
     name: str = "base"
     base_url: str = ""
@@ -92,6 +97,11 @@ class Provider:
         h.update(self.auth_headers(key))
         h.update(self.extra_headers)
         return h
+
+    def adapt_payload(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Last look at the OpenAI-style request body before it is sent, for
+        this provider's quirks (default: unchanged)."""
+        return body
 
     def resolve_models(self, alias: Union[str, Sequence[str]]) -> List[str]:
         """Resolve an alias — or an ordered list of aliases (per-call fallback
@@ -204,7 +214,7 @@ class Provider:
                     index=c.get("index", 0),
                     message=Message(
                         role=m.get("role", "assistant"),
-                        content=m.get("content"),
+                        content=_as_text(m.get("content")),
                         tool_calls=m.get("tool_calls"),
                     ),
                     finish_reason=c.get("finish_reason"),

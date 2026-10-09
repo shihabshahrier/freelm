@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../src/cli.js";
+import { PROVIDER_ENV } from "../src/config.js";
 
 const OK = JSON.stringify({
   id: "x",
@@ -11,15 +12,8 @@ const OK = JSON.stringify({
   usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 });
 
-const KEY_VARS = [
-  "OPENROUTER_API_KEY", "FREELM_OPENROUTER_KEYS",
-  "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_STUDIO_KEY", "FREELM_GOOGLE_KEYS",
-  "NVIDIA_API_KEY", "NIM_API_KEY", "FREELM_NIM_KEYS",
-  "GROQ_API_KEY", "FREELM_GROQ_KEYS",
-  "CEREBRAS_API_KEY", "FREELM_CEREBRAS_KEYS",
-  "MISTRAL_API_KEY", "FREELM_MISTRAL_KEYS",
-  "KILO_API_KEY", "FREELM_KILO_KEYS",
-];
+// every variable fromEnv() reads, so a developer's real env can't leak into a test
+const KEY_VARS = PROVIDER_ENV.flatMap((s) => [...s.keyVars, ...Object.values(s.optionVars ?? {}).flat()]);
 
 let out: string[];
 let err: string[];
@@ -38,7 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete process.env.FREELM_CACHE_DIR;
-  delete process.env.OPENROUTER_API_KEY;
+  for (const v of KEY_VARS) delete process.env[v];
   delete process.env.FREELM_KEYLESS;
 });
 
@@ -172,3 +166,32 @@ it("doctor without keys checks the keyless endpoints", async () => {
   expect(text).toContain("(keyless)");
   expect(text).toContain("no keys configured, 2 keyless endpoint(s) up — ready: kilo, ovh");
 });
+
+it("doctor explains a Cloudflare token without its account id", async () => {
+  process.env.CLOUDFLARE_API_TOKEN = "cf-token-abcdefghijkl";
+  expect(await main(["doctor"])).toBe(1);
+  const text = out.join("");
+  const line = text.split("\n").find((l) => l.trim().startsWith("cloudflare")) ?? "";
+  expect(line).toContain("FAIL");
+  expect(line).toContain("CLOUDFLARE_ACCOUNT_ID");
+  expect(text).not.toContain("cf-token-abcdefghijkl"); // masked
+});
+
+it("doctor lists every variable a provider needs", async () => {
+  expect(await main(["doctor"])).toBe(2); // nothing configured
+  expect(out.join("")).toContain("export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...");
+});
+
+it("doctor shows Cloudflare's error messages", async () => {
+  const acct = "0123456789abcdef0123456789abcdef";
+  process.env.CLOUDFLARE_API_TOKEN = "cf-token-abcdefghijkl";
+  process.env.CLOUDFLARE_ACCOUNT_ID = acct;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ result: null, success: false, messages: [], errors: [{ code: 10000, message: "Authentication error" }] }), { status: 401 })),
+  );
+  expect(await main(["doctor"])).toBe(1);
+  const line = out.join("").split("\n").find((l) => l.trim().startsWith("cloudflare")) ?? "";
+  expect(line).toContain("key rejected (401): Authentication error");
+});
+

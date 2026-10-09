@@ -8,6 +8,9 @@ Recognised vars (comma-separate to supply multiple keys per provider):
   Groq       : GROQ_API_KEY     | FREELM_GROQ_KEYS     (+ FREELM_GROQ_TIER)
   Cerebras   : CEREBRAS_API_KEY | FREELM_CEREBRAS_KEYS (+ FREELM_CEREBRAS_TIER)
   Mistral    : MISTRAL_API_KEY  | FREELM_MISTRAL_KEYS  (+ FREELM_MISTRAL_TIER)
+  Z.ai       : ZAI_API_KEY      | FREELM_ZAI_KEYS      (+ FREELM_ZAI_TIER)
+  Cohere     : COHERE_API_KEY / CO_API_KEY | FREELM_COHERE_KEYS (+ FREELM_COHERE_TIER)
+  Cloudflare : CLOUDFLARE_API_TOKEN | FREELM_CLOUDFLARE_KEYS, plus CLOUDFLARE_ACCOUNT_ID (required)
   Kilo       : KILO_API_KEY     | FREELM_KILO_KEYS     (optional: works keyless too)
 
 Keyless public endpoints (Kilo Gateway, OVHcloud) need no signup at all. They
@@ -20,10 +23,22 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Type, Union
+from typing import List, Optional, Sequence, Tuple, Type, Union
 
 from .errors import ConfigError
-from .providers import NIM, Cerebras, GoogleAIStudio, Groq, Kilo, Mistral, OpenRouter, OVHcloud
+from .providers import (
+    NIM,
+    ZAI,
+    Cerebras,
+    CloudflareWorkersAI,
+    Cohere,
+    GoogleAIStudio,
+    Groq,
+    Kilo,
+    Mistral,
+    OpenRouter,
+    OVHcloud,
+)
 from .providers.base import Provider
 
 
@@ -36,6 +51,8 @@ class ProviderEnv:
     key_vars: Tuple[str, ...]  # first non-empty wins; comma-separated = several keys
     tier_var: str
     signup_url: str  # where to get a free key
+    # extra constructor options from the env: ((kwarg, (VAR, ...)), ...), first non-empty VAR wins
+    option_vars: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
 
 # Order = default provider order for `from_env()`.
@@ -55,6 +72,13 @@ PROVIDER_ENV: Tuple[ProviderEnv, ...] = (
                 "FREELM_CEREBRAS_TIER", "https://cloud.cerebras.ai"),
     ProviderEnv("mistral", Mistral, ("MISTRAL_API_KEY", "FREELM_MISTRAL_KEYS"),
                 "FREELM_MISTRAL_TIER", "https://console.mistral.ai/api-keys"),
+    ProviderEnv("zai", ZAI, ("ZAI_API_KEY", "FREELM_ZAI_KEYS"),
+                "FREELM_ZAI_TIER", "https://z.ai/manage-apikey/apikey-list"),
+    ProviderEnv("cohere", Cohere, ("COHERE_API_KEY", "CO_API_KEY", "FREELM_COHERE_KEYS"),
+                "FREELM_COHERE_TIER", "https://dashboard.cohere.com/api-keys"),
+    ProviderEnv("cloudflare", CloudflareWorkersAI, ("CLOUDFLARE_API_TOKEN", "FREELM_CLOUDFLARE_KEYS"),
+                "FREELM_CLOUDFLARE_TIER", "https://dash.cloudflare.com/profile/api-tokens",
+                (("account_id", ("CLOUDFLARE_ACCOUNT_ID",)),)),
     ProviderEnv("kilo", Kilo, ("KILO_API_KEY", "FREELM_KILO_KEYS"),
                 "FREELM_KILO_TIER", "https://app.kilo.ai"),
 )
@@ -87,6 +111,19 @@ def env_keys(spec: ProviderEnv) -> List[str]:
     return _split(_first_env(*spec.key_vars))
 
 
+def env_vars(spec: ProviderEnv) -> List[str]:
+    """The variables to set for one provider (key first), for setup hints."""
+    return [spec.key_vars[0]] + [names[0] for _, names in spec.option_vars]
+
+
+def build_provider(spec: ProviderEnv, keys: Union[str, Sequence[str]]) -> Provider:
+    """``spec``'s provider for ``keys``, with its tier and options from the env.
+    Raises ``ConfigError`` when a required option is missing (Cloudflare's
+    account id)."""
+    opts = {kw: v for kw, names in spec.option_vars for v in [_first_env(*names)] if v}
+    return spec.cls(keys, tier=os.getenv(spec.tier_var, "free"), **opts)
+
+
 def keyless_mode(value: KeylessArg = None) -> str:
     """``"always"`` | ``"auto"`` | ``"never"`` from an argument or ``FREELM_KEYLESS``
     (library default: never)."""
@@ -109,7 +146,10 @@ def providers_from_env(keyless: KeylessArg = None) -> List[Provider]:
     for spec in PROVIDER_ENV:
         keys = env_keys(spec)
         if keys:
-            provs.append(spec.cls(keys, tier=os.getenv(spec.tier_var, "free")))
+            try:
+                provs.append(build_provider(spec, keys))
+            except ConfigError as e:  # e.g. a Cloudflare token without its account id
+                print(f"freelm: {e}; skipping it.", file=sys.stderr)
 
     mode = keyless_mode(keyless)
     if mode == "always" or (mode == "auto" and not provs):

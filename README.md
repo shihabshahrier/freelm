@@ -5,8 +5,8 @@
 [![CI](https://github.com/shihabshahrier/freelm/actions/workflows/ci.yml/badge.svg)](https://github.com/shihabshahrier/freelm/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/shihabshahrier/freelm/blob/main/LICENSE)
 
-**freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM and Kilo into one
-OpenAI-compatible LLM — in your Python or TypeScript code, or as a local `/v1` endpoint for any tool.** It rotates
+**freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral,
+NVIDIA NIM and Kilo into one OpenAI-compatible LLM — in your Python or TypeScript code, or as a local `/v1` endpoint for any tool.** It rotates
 your keys, fails over across providers on rate limits, outages and retired models, and discovers which models are
 free today. Your own free keys, called directly: nothing to host, no relay in the middle — and the CLI even works
 with **no keys at all**.
@@ -139,6 +139,9 @@ See the
 | Google AI Studio (Gemini) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` | Most generous free tier; per-model limits. Pro models have no free quota. |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) | `GROQ_API_KEY` | Very fast; per model 30 req/min, 1K req/day. Not xAI's "Grok" (that one is paid). |
 | OpenRouter | [openrouter.ai/keys](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` | `:free` models + the `openrouter/free` router only (guarded); 20 req/min, 50 req/day (1000/day after $10 of lifetime credit). |
+| Cloudflare Workers AI | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 10,000 Neurons/day free on every account (a few hundred chats); Llama 4 Scout, gpt-oss, Qwen 3.8, Gemma 4, GLM-4.7-Flash. Token needs Workers AI permission. |
+| Z.ai (GLM) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` | GLM-4.7-Flash, GLM-4.5-Flash and GLM-4.6V-Flash (vision) are free; other GLM models are paid, so they're blocked (guarded). |
+| Cohere | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` | Command A / A+ on a free **trial** key: 20 req/min per model, 1,000 calls/month, non-commercial use. |
 | Kilo Gateway | [app.kilo.ai](https://app.kilo.ai) (optional) | `KILO_API_KEY` | Free routes (`:free`, `kilo-auto/free`) work **without a key** (~200 req/hour per IP); a free account lifts that. Free-only guard on. |
 | OVHcloud AI Endpoints | none — anonymous | — | Keyless, 2 req/min per IP per model; last-resort fallback. (An OVH key is pay-as-you-go, so freelm doesn't use one.) |
 | Cerebras | [cloud.cerebras.ai](https://cloud.cerebras.ai) | `CEREBRAS_API_KEY` | ⚠️ No longer permanently free (trial credits, card required) — supported if you already have a key. |
@@ -157,7 +160,8 @@ and `freelm doctor` tells you what works right now. The built-in fallback model 
 ## How it stays up
 
 - **Every failure fails over.** 429 → rotate the key (or just bench the model, where quotas are per-model: Gemini,
-  Groq); 5xx / timeouts → circuit breaker + backoff; 401/402 → disable that key; a retired model (404/410) → bench it
+  Groq, Z.ai, Cohere; a key whose daily or monthly quota is spent rests instead of being retried every minute);
+  5xx / timeouts → circuit breaker + backoff; 401/402 → disable that key; a retired model (404/410) → bench it
   for an hour; one provider rejecting a request (unsupported parameter, moderation) → try the next provider. Only a
   request that several providers reject is reported as your bug.
 - **Breadth-first failover:** the best model of *every* provider is tried before any provider's second model, so a
@@ -210,10 +214,12 @@ freelm health                   # this process's key state
 
 ## When can freelm cost money?
 
-Free-only by default and by guard: OpenRouter and Kilo paid models are blocked unless you pass `free_only=False`;
-Google is free unless *you* pick `tier="tier1"` (billing enabled); NIM consumes free build credits and Cerebras trial
-credits (requests fail when they run out — nothing is billed through freelm); Groq and Mistral free accounts only
-have free models; OVHcloud is used anonymously only.
+Free-only by default and by guard: OpenRouter, Kilo and Z.ai paid models are blocked unless you pass
+`free_only=False`; Google is free unless *you* pick `tier="tier1"` (billing enabled); NIM consumes free build credits
+and Cerebras trial credits (requests fail when they run out — nothing is billed through freelm); Groq and Mistral
+free accounts only have free models; OVHcloud is used anonymously only. Your account's plan decides the rest: Cohere
+bills only production (non-trial) keys, and Cloudflare only on the Workers Paid plan (past the daily free Neurons —
+the Free plan just stops).
 
 ## How freelm compares
 
@@ -221,7 +227,7 @@ have free models; OVHcloud is used anonymously only.
 |---------|------------|------------|
 | [freellmapi](https://github.com/tashfeenahmed/freellmapi), [freellmpool](https://github.com/0xzr/freellmpool) | Self-hosted gateways pooling many free providers | freelm is a library first (`pip`/`npm install`, nothing to host) with the gateway optional (`freelm serve`), in both Python and TypeScript |
 | [LiteLLM](https://github.com/BerriAI/litellm) | SDK + proxy for 100+ providers, paid and free | freelm is free-only, zero-dependency, with per-key quota/breaker state and free-model discovery built in |
-| [OpenRouter](https://openrouter.ai) | One aggregator | One of freelm's pools — when its free quota runs out, freelm fails over to Gemini, Groq, Cerebras, Mistral or NIM directly |
+| [OpenRouter](https://openrouter.ai) | One aggregator | One of freelm's pools — when its free quota runs out, freelm fails over to Gemini, Groq, Cloudflare, Z.ai, Mistral or NIM directly |
 | LangChain / LlamaIndex | Orchestration frameworks | Use freelm under them via `freelm serve` or the OpenAI-compatible shim |
 
 ## FAQ
@@ -233,7 +239,8 @@ freelm pools them behind one OpenAI-compatible call and fails over automatically
 
 ### Is there a free alternative to the OpenAI API?
 Yes. `freelm.compat.OpenAI` is a drop-in for the OpenAI SDK, and `freelm serve` exposes a local
-`/v1/chat/completions` endpoint, both backed by free tiers (Gemini, Groq, OpenRouter, Cerebras, Mistral, NVIDIA NIM)
+`/v1/chat/completions` endpoint, both backed by free tiers (Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai,
+Cohere, Mistral, NVIDIA NIM)
 with streaming, tool calling and automatic failover.
 
 ### How do I use free LLMs in Cursor, Cline, Continue, Open WebUI or n8n?
