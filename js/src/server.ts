@@ -20,6 +20,9 @@ import { chunkStamper, completionBody } from "./types.js";
 import { VERSION } from "./version.js";
 
 const MAX_BODY = 20 * 1024 * 1024; // generous for base64 images, bounded against abuse
+// An oversized body is read and discarded up to this much, so the 413 reaches a
+// client that is still uploading; beyond it the connection is just dropped.
+const DRAIN_LIMIT = 4 * MAX_BODY;
 const CHAT_PATHS = new Set(["/v1/chat/completions", "/chat/completions"]);
 const MODEL_PATHS = new Set(["/v1/models", "/models"]);
 const HEALTH_PATHS = new Set(["/health", "/v1/health", "/healthz"]);
@@ -92,16 +95,25 @@ function readBody(req: IncomingMessage): Promise<string> {
     const parts: Buffer[] = [];
     let size = 0;
     let tooBig = false;
+    const tooLarge = () => Object.assign(new Error(`request body larger than ${MAX_BODY / (1024 * 1024)} MB`), { status: 413 });
     req.on("data", (c: Buffer) => {
-      if (tooBig) return; // keep draining so the 413 reaches the client
       size += c.length;
+      if (size > DRAIN_LIMIT) {
+        req.destroy(); // a client that won't stop sending: drop it
+        return;
+      }
       if (size > MAX_BODY) {
         tooBig = true;
-        reject(Object.assign(new Error(`request body larger than ${MAX_BODY / (1024 * 1024)} MB`), { status: 413 }));
-      } else parts.push(c);
+        parts.length = 0; // keep draining (discarding) until the upload ends
+      } else if (!tooBig) parts.push(c);
+    });
+    req.on("close", () => {
+      if (tooBig) reject(tooLarge()); // no-op if already settled
     });
     req.on("end", () => {
-      if (tooBig) return;
+      // answer only once the whole upload is consumed, or the client (still
+      // writing) sees a connection reset instead of the 413
+      if (tooBig) return reject(tooLarge());
       const text = Buffer.concat(parts).toString("utf-8");
       if (!text) reject(Object.assign(new Error("a JSON request body is required"), { status: 400 }));
       else resolve(text);

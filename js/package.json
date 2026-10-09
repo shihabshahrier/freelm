@@ -1,7 +1,7 @@
 {
   "name": "freelm",
   "version": "0.4.0",
-  "description": "Free LLM API for Node.js & TypeScript: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM and Kilo \u2014 automatic failover, streaming, tool calls, works with no keys. Zero dependencies.",
+  "description": "Free LLM API for Node.js & TypeScript: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM and Kilo — automatic failover, streaming, tool calls, works with no keys. Zero dependencies.",
   "keywords": [
     "llm",
     "free-llm",
@@ -74,7 +74,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "freelm": "./bin/freelm.mjs"
+    "freelm": "bin/freelm.mjs"
   },
   "files": [
     "dist",

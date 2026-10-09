@@ -37,6 +37,9 @@ from .registry import _VIRTUAL, is_virtual
 from .types_compat import _ChunkStamper, wrap_completion
 
 MAX_BODY = 20 * 1024 * 1024  # generous for base64 images, bounded against abuse
+# An oversized body is read and discarded up to this much, so the 413 reaches a
+# client that is still uploading; beyond it the connection is just closed.
+DRAIN_LIMIT = 4 * MAX_BODY
 _CHAT_PATHS = ("/v1/chat/completions", "/chat/completions")
 _MODEL_PATHS = ("/v1/models", "/models")
 _HEALTH_PATHS = ("/health", "/v1/health", "/healthz")
@@ -46,9 +49,10 @@ _DONE = object()
 
 
 class _BodyError(Exception):
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, drained: bool = False) -> None:
         super().__init__(message)
         self.status = status
+        self.drained = drained  # the whole body was consumed: the connection can stay open
 
 
 class _Loop:
@@ -255,7 +259,16 @@ class _Handler(BaseHTTPRequestHandler):
         if length <= 0:
             raise _BodyError(400, "a JSON request body is required")
         if length > MAX_BODY:
-            raise _BodyError(413, f"request body larger than {MAX_BODY // (1024 * 1024)} MB")
+            msg = f"request body larger than {MAX_BODY // (1024 * 1024)} MB"
+            if length > DRAIN_LIMIT:
+                raise _BodyError(413, msg)
+            left = length
+            while left > 0:  # discard it, or the still-uploading client sees a reset instead of the 413
+                got = self.rfile.read(min(left, 1 << 16))
+                if not got:
+                    break
+                left -= len(got)
+            raise _BodyError(413, msg, drained=True)
         return self.rfile.read(length)
 
     # -- verbs --------------------------------------------------------------
@@ -311,7 +324,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
                 raise ValueError("body must be an object with a 'messages' list")
         except _BodyError as e:
-            self._send_json(e.status, _error_body(str(e), "invalid_request_error"), close=True)
+            self._send_json(e.status, _error_body(str(e), "invalid_request_error"), close=not e.drained)
             return
         except ValueError as e:
             self._send_json(400, _error_body(f"invalid JSON body: {e}", "invalid_request_error"))
