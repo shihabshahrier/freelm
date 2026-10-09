@@ -17,11 +17,13 @@ Explicit config::
 from __future__ import annotations
 
 from ._types import ChatRequest, ChatResponse, Choice, Event, Message, Usage
+from ._version import __version__
 from .client import AsyncFreeLLM, FreeLLM
 from .config import providers_from_env
 from .discovery import list_free_models
 from .errors import (
     AuthError,
+    BadRequest,
     ConfigError,
     FreeLLMError,
     ModelNotFound,
@@ -31,9 +33,16 @@ from .errors import (
     RateLimited,
     Transient,
 )
-from .providers import Cerebras, Gemini, GoogleAIStudio, Groq, Mistral, NIM, OpenRouter, Provider
+from .providers import NIM, Cerebras, Gemini, GoogleAIStudio, Groq, Kilo, Mistral, OpenRouter, OVHcloud, Provider
 from .registry import ModelSpec
-from ._version import __version__
+
+
+def serve(*args, **kwargs):
+    """Run the local OpenAI-compatible endpoint (``freelm serve``); see :mod:`freelm.server`."""
+    from .server import serve as _serve
+
+    return _serve(*args, **kwargs)
+
 
 __all__ = [
     "FreeLLM",
@@ -46,6 +55,8 @@ __all__ = [
     "Groq",
     "Cerebras",
     "Mistral",
+    "Kilo",
+    "OVHcloud",
     "ModelSpec",
     "Message",
     "ChatRequest",
@@ -55,10 +66,12 @@ __all__ = [
     "Event",
     "providers_from_env",
     "list_free_models",
+    "serve",
     "FreeLLMError",
     "ConfigError",
     "ProviderError",
     "AuthError",
+    "BadRequest",
     "QuotaExhausted",
     "RateLimited",
     "Transient",

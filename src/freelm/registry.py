@@ -24,7 +24,16 @@ class ModelSpec:
 _SIZE_ALIASES = {"best": "large", "big": "large", "mini": "small", "cheap": "small", "lite": "small"}
 # tags that can be asked for directly: `chat:tools`, `vision`, `reasoning`, ...
 _TAG_ALIASES = {"large", "fast", "small", "tools", "vision", "reasoning"}
+# hard capabilities: a model without them fails the request (tools / images),
+# so no fallback. Sizes and "reasoning" are soft preferences.
+_CAPABILITY_TAGS = {"tools", "vision"}
 _VIRTUAL = {"auto", "chat", "default"} | _TAG_ALIASES | set(_SIZE_ALIASES)
+
+
+def is_virtual(alias: str) -> bool:
+    """True for router aliases (``auto``, ``chat:fast``, ``tools``, ...); False
+    for anything that will be treated as a concrete model id."""
+    return alias.strip().lower().partition(":")[0] in _VIRTUAL
 
 
 def resolve_models(models: List[ModelSpec], alias: str) -> List[str]:
@@ -55,6 +64,10 @@ def resolve_models(models: List[ModelSpec], alias: str) -> List[str]:
         tagged = [m.id for m in ordered if want in m.tags]
         if tagged:
             return tagged
+        if want in _CAPABILITY_TAGS:
+            # a capability is a hard requirement: sending tools or images to a
+            # model without them just fails — let a provider that has one serve
+            return []
 
     chat = [m.id for m in ordered if "chat" in m.tags]
     return chat or [m.id for m in ordered]

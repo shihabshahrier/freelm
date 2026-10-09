@@ -4,7 +4,6 @@ import httpx
 import respx
 
 from conftest import ok_payload
-
 from freelm import AsyncFreeLLM, GoogleAIStudio, OpenRouter
 
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"

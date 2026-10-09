@@ -1,4 +1,9 @@
-"""Cerebras (https://cerebras.ai) — OpenAI-compatible, fast inference, free tier."""
+"""Cerebras (https://cerebras.ai) — OpenAI-compatible, very fast inference.
+
+As of 2026-10 Cerebras has no permanently free tier: new accounts get trial
+credits (payment method required). freelm still supports a key you already
+have; when the credits run out requests fail with 402 and the key is
+disabled — nothing is billed through freelm."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -18,14 +23,13 @@ class Cerebras(Provider):
         "free": {"rpm": 30, "rpd": None},
     }
 
-    # gpt-oss-120b confirmed via API; others are fallbacks — runtime discovery
-    # replaces this list with the account's real /models.
+    # The live catalog (2026-10-09) lists only these two; llama-3.3-70b and
+    # qwen-3-32b are gone (404). Runtime discovery replaces this list.
     DEFAULT_MODELS = [
-        ModelSpec("llama-3.3-70b", ("chat", "large"), ctx=8192),
-        ModelSpec("qwen-3-32b", ("chat", "large"), ctx=8192),
+        ModelSpec("qwen-3.8-27b", ("chat", "small", "fast"), ctx=8192),
         ModelSpec("gpt-oss-120b", ("chat", "large", "reasoning"), ctx=8192),
     ]
 
     def __init__(self, keys, **kw):
-        kw.setdefault("discover", True)
+        kw.setdefault("discover", not kw.get("models"))  # an explicit models= list wins
         super().__init__(keys, **kw)

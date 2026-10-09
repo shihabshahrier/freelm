@@ -3,7 +3,6 @@ import pytest
 import respx
 
 from conftest import ok_payload
-
 from freelm import FreeLLM, OpenRouter
 from freelm.discovery import discover_sync, to_specs
 

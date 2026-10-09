@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from .._keys import KeyState, new_key_state
+from .._keys import ANONYMOUS, KeyState, new_key_state
 from .._types import ChatResponse, Choice, Message, Usage
 from ..errors import ConfigError
 from ..registry import ModelSpec, resolve_models
@@ -70,6 +70,9 @@ class Provider:
             new_key_state(k, tier=tier, rpm=self.rpm, rpd=self.rpd) for k in keys
         ]
         self._rr = 0  # key round-robin cursor
+        # model id -> monotonic ts until which it is benched (retired, or
+        # throttled upstream); the router skips benched models.
+        self._model_until: Dict[str, float] = {}
 
     # -- request shaping -------------------------------------------------
     @property
@@ -80,6 +83,8 @@ class Provider:
         return self.base_url.rstrip("/") + self.models_path
 
     def auth_headers(self, key: str) -> Dict[str, str]:
+        if key == ANONYMOUS:
+            return {}  # keyless provider: no credentials at all
         return {"Authorization": f"Bearer {key}"}
 
     def headers(self, key: str) -> Dict[str, str]:
@@ -90,16 +95,49 @@ class Provider:
 
     def resolve_models(self, alias: Union[str, Sequence[str]]) -> List[str]:
         """Resolve an alias — or an ordered list of aliases (per-call fallback
-        chain) — to concrete model ids, applying ``prefer`` and the free guard."""
+        chain) — to concrete model ids, applying ``prefer`` and the free guard.
+
+        An alias the free guard rejects is skipped; ``ConfigError`` is raised
+        only when it leaves nothing to try."""
         aliases = [alias] if isinstance(alias, str) else list(alias)
         out: List[str] = []
         seen = set()
+        guard: Optional[ConfigError] = None
         for a in aliases:
-            for mid in self._resolve_one(a):
+            try:
+                ids = self._resolve_one(a)
+            except ConfigError as e:
+                guard = guard or e
+                continue
+            for mid in ids:
                 if mid not in seen:
                     seen.add(mid)
                     out.append(mid)
+        if not out and guard is not None:
+            raise guard
         return out
+
+    def knows_model(self, model_id: str) -> bool:
+        """Is ``model_id`` in this provider's (discovered or built-in) list?"""
+        return any(m.id == model_id for m in self.models)
+
+    # -- per-model availability ------------------------------------------
+    def bench_model(self, model_id: str, until: float) -> None:
+        """Stop offering ``model_id`` until monotonic time ``until``."""
+        self._model_until[model_id] = max(until, self._model_until.get(model_id, 0.0))
+
+    def model_wait(self, model_id: str, now: float) -> float:
+        """Seconds until ``model_id`` is offered again on this provider (0 = now)."""
+        until = self._model_until.get(model_id)
+        if until is None:
+            return 0.0
+        if now >= until:
+            del self._model_until[model_id]
+            return 0.0
+        return until - now
+
+    def model_ready(self, model_id: str, now: float) -> bool:
+        return self.model_wait(model_id, now) == 0.0
 
     def _resolve_one(self, alias: str) -> List[str]:
         ids = resolve_models(self.models, alias)
@@ -107,6 +145,10 @@ class Provider:
             # exact id or passthrough — guard it, but don't reorder a direct ask
             self._check_free(alias)
             return ids
+        if self.free_only:
+            # an alias must never resolve to a paid model on a free-only provider
+            paid = {m.id for m in self.models if not m.free}
+            ids = [i for i in ids if i not in paid]
         return self._apply_prefer(ids)
 
     def _apply_prefer(self, ids: List[str]) -> List[str]:
@@ -124,16 +166,32 @@ class Provider:
                 front.append(m)
         return front + rest
 
+    # A provider that works without any key (Kilo Gateway, OVHcloud anonymous).
+    keyless: bool = False
+
     def _check_free(self, model_id: str) -> None:
-        """Hook for providers whose catalog mixes paid and free models.
-        Base: every model on the account's tier is free — nothing to check."""
+        """Guard for catalogs that mix paid and free models (``free_only=True``):
+        a concrete id must be ``:free`` or listed as free. Providers whose whole
+        account is free-tier keep ``free_only=False`` and skip the check."""
+        if not self.free_only or model_id.endswith(":free"):
+            return
+        spec = next((m for m in self.models if m.id == model_id), None)
+        if spec is not None and spec.free:
+            return
+        raise ConfigError(
+            f"[{self.name}] {model_id!r} is not a free model. freelm is free-only by default — pass "
+            f"{type(self).__name__}(key, free_only=False) to allow paid ids on your own account."
+        )
 
     def rate_limit_scope(self, body: str) -> str:
-        """Is a 429 account/key-wide (``"key"``) or just this model (``"model"``)?
+        """Who does a 429 throttle? ``"key"`` (this key/account — cool it; the
+        default), ``"model"`` (this key's per-model quota — Gemini, Groq) or
+        ``"upstream"`` (the model, for everyone — OpenRouter's shared free pool)."""
+        return "key"
 
-        Default assumes key-wide (Google/NIM bill per account). Providers like
-        OpenRouter, where free models get throttled upstream per-model, override
-        this so we try a different model on the same key first."""
+    def transient_scope(self, body: str) -> str:
+        """Is a 5xx/timeout about the whole provider (``"key"``, default — cool
+        the key) or one overloaded model (``"model"`` — bench just the model)?"""
         return "key"
 
     # -- response parsing ------------------------------------------------

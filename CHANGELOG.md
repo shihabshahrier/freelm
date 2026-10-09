@@ -3,6 +3,117 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.4.0] - 2026-10-09
+
+Python and the JS/TS package both move to 0.4.0 (versions are aligned from now on).
+
+### Fixed — the free tiers changed under us
+- **A retired model no longer kills the call.** NVIDIA NIM answers `410 Gone`
+  for end-of-life models (all of NIM's previous defaults since 2026-08-26), and
+  any status freelm didn't recognise was raised as a caller bug — so with a
+  NIM key configured, `chat()`/`stream()` failed even when five other providers
+  were healthy. 404/410 (and 400s saying "decommissioned", "no longer
+  available", ...) now mean "model gone": the provider *benches* that model for
+  an hour and the call fails over. Benched models keep their place in the
+  breadth-first interleave, so a provider full of dead models can't starve the
+  others.
+- **No status aborts a call by itself any more.** All 5xx (incl. Cloudflare
+  52x and 501) are transient; 413 / "context too long" try a model with room;
+  Google's 400 `API_KEY_INVALID` / location errors disable the key; OpenRouter's
+  moderation 403 no longer disables the key. Any other 4xx is a `BadRequest`
+  (new) that fails over to the next *provider* and is raised only once two
+  providers reject the same request — free tiers disagree about which
+  parameters they accept. A rejected request no longer trips the breaker.
+- **Concrete model ids work next to OpenRouter.** `model="gemini-2.5-flash"`
+  (or any Groq/NIM/Mistral id) raised OpenRouter's free-guard `ConfigError`
+  whenever an OpenRouter key was configured. Concrete ids now go only to the
+  providers that list them; the guard skips its provider instead of failing
+  the call (it still raises when nobody else can serve).
+- **Errors delivered with HTTP 200** — `{"error": ...}` bodies, OpenRouter's
+  mid-stream error frames, non-JSON 200s — fail over instead of returning
+  empty text or crashing with a JSON error.
+- **Per-model limits are per-model**: Gemini and Groq 429s bench just that
+  model *for that key* (other models, and other keys, keep serving); Gemini's
+  "high demand" 503s and OpenRouter's upstream throttles bench the model on
+  every key; a model retired for everyone (410 / "end of life") is benched
+  provider-wide while "no access" 404s only affect the key that got them;
+  Google's `retryDelay` is honoured; `Retry-After: 0` no longer means 60 s.
+  A 402 naming a model benches the model, not the key.
+- **Fresh default models for every provider** (all of June's fallbacks were
+  dead): Gemini verified live on the free tier, Groq's named successors after
+  the 2026-08-16 shutdown, NIM/Cerebras/OpenRouter from their live catalogs.
+- **`wait=True` no longer spins** until the deadline when every candidate was
+  tried or benched; each attempt is bounded by the call's remaining time;
+  discovery uses a 10 s timeout, runs once for concurrent first calls (async),
+  tries the next key when the first is dead, and `refresh_models()` really
+  re-fetches.
+- **Discovery tagging**: size words match whole tokens ("gemini" is not
+  "mini"), Groq/Mistral metadata (context window, tool/vision capability) is
+  read, Google's `models/` prefix is stripped, safety/reward/parse models are
+  filtered, and paid OpenRouter entries are never picked for an alias on a
+  free-only provider. An explicit `models=[...]` list is no longer overwritten
+  by discovery. `chat:tools` / `vision` never fall back to incapable models.
+- **Secrets**: `repr()` / `util.inspect` / `JSON.stringify` of keys, candidates
+  and errors show masked keys only.
+- **Persistence** (`persist=True`): a daily counter from an expired window is
+  reset on load, concurrent writers use unique temp files, bad field types are
+  tolerated, and a persisted `disabled` flag expires after 24 h.
+- **Messages**: OpenAI-SDK message objects (`model_dump()`) are accepted and
+  null fields (`"tool_calls": null`) are dropped before sending; content-part
+  arrays flatten into `.text`.
+- **JS**: a stream consumer slower than `timeout` could hang forever (the
+  inactivity timer ran while the generator was paused); timers now only run
+  around network reads and never keep the process alive. `[DONE]` closes the
+  connection. Caller `signal` (AbortSignal) is supported and no longer leaks
+  into the request body. `freelm/compat` in CommonJS no longer bundles a second
+  copy of the library (broken `instanceof`). The package imports no `node:`
+  built-ins statically, so it bundles for Workers/edge/browsers; disk cache and
+  persistence switch on where Node built-ins exist.
+
+### Added
+- **Works with zero keys (CLI) — keyless providers.** `Kilo` (Kilo Gateway: free
+  routes work without a key, ~200 req/hour per IP; `KILO_API_KEY` optional,
+  free-only guard on) and `OVHcloud` (AI Endpoints anonymous tier, 2 req/min per
+  IP per model; keys are pay-as-you-go so they are never used). The CLI falls
+  back to them when no keys are configured, with a notice; the library only on
+  request (`from_env(keyless=True | "auto")`, `FREELM_KEYLESS=1|auto|0`) so
+  prompts are never sent to them silently.
+- **OpenRouter `openrouter/free`** router as the last fallback model; the free
+  guard now accepts any catalog entry priced at zero (and Kilo's `isFree`).
+- **`freelm serve`** — the router as a local OpenAI-compatible endpoint
+  (`/v1/chat/completions` with SSE streaming, `/v1/models`, `/health`), zero
+  dependencies in both languages. Point Cursor, Cline, Continue, Open WebUI,
+  n8n, LangChain or the Vercel AI SDK at `http://127.0.0.1:4000/v1`. Optional
+  `--api-key`, `--cors`; unknown model ids (a tool's default `gpt-4o`) fall back
+  to `auto` unless `--no-fallback`. Also `freelm.serve()` / `serve()` in code.
+- **Docker image** for `freelm serve` (`ghcr.io/shihabshahrier/freelm`, amd64 + arm64), published on release tags.
+- **`freelm doctor`** — live-checks every configured key with one tiny request
+  and says exactly what's wrong and where to get a new free key (`--json` too).
+- **`stream_chunks()` / `astream_chunks()` / `streamChunks()`** — raw
+  `chat.completion.chunk` streaming with tool-call deltas, finish reasons and
+  usage, failover still invisible before the first output.
+- `reset_keys()` / `resetKeys()`; `NoProvidersAvailable.status` (one line per
+  provider explaining why it's unusable, also in the message).
+- **OpenAI compat shim fidelity**: attribute access all the way down
+  (`message.tool_calls[0].function.arguments`), `created`/`id`, `model_dump()` /
+  `to_dict()` / `model_dump_json()`, streams as context managers with tool-call
+  deltas and finish reasons, `models.list()`, `extra_body`, `with` blocks;
+  JS: millisecond `timeout`s from openai-node, `create(body, { signal })`,
+  `stream.controller`, `models.list()` (awaitable and async-iterable).
+- OpenRouter app attribution headers (`HTTP-Referer`, `X-Title`).
+
+### Changed
+- **Cerebras is no longer permanently free** (trial credits, card required as of
+  2026-10): still supported for existing keys, documented as such.
+- Groq free-tier defaults follow its current per-model limits (30 RPM, 1K RPD).
+- JS requires Node >= 20 (Node 18 and 20 are end-of-life upstream; CI covers
+  20/22/24). Dev tooling: vitest 4 (clears the dev-only audit advisories).
+- CI: ruff's rule selection is pinned in `pyproject.toml` (ruff 0.16 widened
+  its defaults and turned CI red without a code change); GitHub Actions bumped
+  to current majors; release workflows support PyPI/npm Trusted Publishing.
+
+[0.4.0]: https://github.com/shihabshahrier/freelm/releases/tag/v0.4.0
+
 ## [0.3.0] - 2026-06-10
 
 Applies to Python 0.3.0 and the JS/TS package 0.2.0 (the two track each other).

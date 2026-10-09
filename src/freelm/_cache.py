@@ -22,9 +22,10 @@ def default_ttl() -> float:
     if not raw:
         return DEFAULT_TTL
     try:
-        return float(raw)
+        ttl = float(raw)
     except ValueError:
         return DEFAULT_TTL
+    return ttl if 0 <= ttl < float("inf") else DEFAULT_TTL
 
 
 def _path(name: str) -> str:
@@ -36,11 +37,19 @@ def load(name: str) -> Optional[List[Any]]:
     try:
         with open(_path(name), "r", encoding="utf-8") as f:
             entry = json.load(f)
-        if time.time() > entry.get("expires_at", 0):
-            return None
-        return entry.get("data")
     except (OSError, ValueError):
         return None
+    if not isinstance(entry, dict):
+        return None  # foreign/corrupt file: ignore it, a live fetch will rewrite it
+    try:
+        if time.time() > float(entry.get("expires_at") or 0):
+            return None
+    except (TypeError, ValueError):
+        return None
+    data = entry.get("data")
+    if not isinstance(data, list):
+        return None
+    return [m for m in data if isinstance(m, dict)]
 
 
 def save(name: str, data: List[Any], ttl: Optional[float] = None) -> None:

@@ -79,7 +79,10 @@ class ChatResponse:
     def text(self) -> str:
         if not self.choices:
             return ""
-        return self.choices[0].message.content or ""
+        content: Any = self.choices[0].message.content
+        if isinstance(content, list):  # content parts: [{"type": "text", "text": ...}, ...]
+            return "".join(p.get("text") or "" for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return content or ""
 
     @property
     def tool_calls(self) -> Optional[List[Dict[str, Any]]]:
@@ -136,10 +139,30 @@ class ChatRequest:
         return body
 
 
+def _message_dict(m: Any) -> Dict[str, Any]:
+    """Normalize one message for the wire: a str is a user turn; dicts, our
+    ``Message`` and OpenAI-SDK / pydantic message objects (``model_dump()``) keep
+    every field except null ones — providers reject e.g. ``"tool_calls": null``."""
+    if isinstance(m, str):
+        return {"role": "user", "content": m}
+    if isinstance(m, Message):
+        return m.to_dict()
+    if not isinstance(m, dict):
+        dump = getattr(m, "model_dump", None) or getattr(m, "to_dict", None)
+        if not callable(dump):
+            raise TypeError(f"unsupported message type: {type(m)!r}")
+        m = dump()
+        if not isinstance(m, dict):
+            raise TypeError(f"unsupported message type: {type(m)!r}")
+    out = {k: v for k, v in m.items() if v is not None}
+    out.setdefault("role", "user")
+    return out
+
+
 def build_request(messages: Any, model: Union[str, Sequence[str]], kw: Dict[str, Any]) -> ChatRequest:
     if not isinstance(messages, (list, tuple)):
         messages = [messages]
-    msgs = [Message.from_any(m).to_dict() for m in messages]
+    msgs = [_message_dict(m) for m in messages]
     fields = {k: kw.pop(k) for k in list(kw) if k in _SAMPLING_FIELDS}
     m = model if isinstance(model, str) else tuple(model)
     return ChatRequest(messages=msgs, model=m, extra=dict(kw), **fields)

@@ -23,16 +23,30 @@ class GoogleAIStudio(Provider):
         "tier1": {"rpm": 2000, "rpd": None},
     }
 
-    # Gemini 1.5 is retired for new projects; 2.5 flash family is the current
-    # free-tier workhorse, with 2.0 flash kept as a fallback (2026-06).
-    # 2.5-flash *thinks by default* and can spend a small max_tokens budget
-    # entirely on reasoning (empty text, finish_reason=length) — so the
-    # non-thinking lite leads for `auto`, and flash is tagged "reasoning".
+    # Verified live on the free tier 2026-10-09. gemini-2.0-flash and
+    # gemini-2.5-pro are retired (404); Pro/preview "omni"/deep-research models
+    # have no free quota (429, limit 0), so they're left out. Thinking models
+    # (2.5-flash, 3.x-flash) can spend a small max_tokens budget entirely on
+    # reasoning (empty text, finish_reason=length) — the non-thinking lite
+    # models lead for `auto`, and the thinkers are tagged "reasoning".
     DEFAULT_MODELS = [
-        ModelSpec("gemini-2.5-flash-lite", ("chat", "fast", "small"), ctx=1000000),
-        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large", "reasoning"), ctx=1000000),
-        ModelSpec("gemini-2.0-flash", ("chat", "fast"), ctx=1000000),
+        ModelSpec("gemini-2.5-flash-lite", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
+        ModelSpec("gemini-3.1-flash-lite", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
+        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large", "tools", "vision", "reasoning"), ctx=1048576),
+        ModelSpec("gemini-3-flash-preview", ("chat", "large", "tools", "vision", "reasoning"), ctx=1048576),
+        ModelSpec("gemini-flash-lite-latest", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
     ]
+
+    def rate_limit_scope(self, body: str) -> str:
+        # AI Studio quotas (RPM/TPM/RPD) are per model, so a 429 on one model
+        # leaves the others usable on the same key.
+        return "model"
+
+    def transient_scope(self, body: str) -> str:
+        # "This model is currently experiencing high demand" (503) is about one
+        # model; other Gemini models on the same key keep working.
+        b = (body or "").lower()
+        return "model" if ("high demand" in b or "overloaded" in b) else "key"
 
 
 # Friendly alias

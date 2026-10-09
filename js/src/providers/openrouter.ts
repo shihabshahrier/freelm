@@ -1,4 +1,4 @@
-import { ConfigError } from "../errors.js";
+import { ErrorScope } from "../errors.js";
 import { modelSpec, ModelSpec } from "../registry.js";
 import { Provider, ProviderOptions, TierLimit } from "./base.js";
 
@@ -11,36 +11,33 @@ export class OpenRouter extends Provider {
     free: { rpm: 20, rpd: 50 }, // < $10 lifetime credit
     credit: { rpm: 20, rpd: 1000 }, // >= $10 lifetime credit
   };
+  // Free model ids churn constantly; these were listed as free in the public
+  // catalog on 2026-10-09 (diverse upstreams, so one throttle still fails over).
+  // Live discovery replaces this list at runtime.
   static defaultModels: ModelSpec[] = [
-    modelSpec("openai/gpt-oss-120b:free", ["chat", "large"], 131072),
-    modelSpec("openai/gpt-oss-20b:free", ["chat", "small", "fast"], 131072),
-    modelSpec("meta-llama/llama-3.3-70b-instruct:free", ["chat", "large"], 131072),
-    modelSpec("z-ai/glm-4.5-air:free", ["chat", "large"], 131072),
-    modelSpec("qwen/qwen3-next-80b-a3b-instruct:free", ["chat", "large"], 262144),
-    modelSpec("meta-llama/llama-3.2-3b-instruct:free", ["chat", "small", "fast"], 131072),
+    modelSpec("google/gemma-4-31b-it:free", ["chat", "large", "tools", "vision"], 262144),
+    modelSpec("nvidia/nemotron-3-super-120b-a12b:free", ["chat", "large", "tools", "reasoning"], 262144),
+    modelSpec("google/gemma-4-26b-a4b-it:free", ["chat", "fast", "tools", "vision"], 262144),
+    modelSpec("nvidia/nemotron-3.5-lightning:free", ["chat", "fast", "tools"], 1000000),
+    modelSpec("poolside/laguna-s-2.1:free", ["chat", "tools"], 262144),
+    modelSpec("thinkingmachines/inkling-small:free", ["chat", "small", "fast", "tools", "vision"], 1048576),
+    // OpenRouter's own router across whatever free models are up right now
+    modelSpec("openrouter/free", ["chat"], 200000),
   ];
 
   constructor(keys: string | string[], opts: ProviderOptions = {}) {
-    const extraHeaders = { "X-Title": "freelm", ...(opts.extraHeaders ?? {}) };
+    // App attribution: OpenRouter lists apps that send a referer + title on
+    // openrouter.ai/apps and in each model's "Apps" tab. Override via extraHeaders.
+    const extraHeaders = { "HTTP-Referer": "https://github.com/shihabshahrier/freelm", "X-Title": "freelm", ...(opts.extraHeaders ?? {}) };
     // OpenRouter's catalog mixes paid and free models -> guard paid ids by default.
-    super(keys, { discover: true, discoverFreeOnly: true, freeOnly: true, ...opts, extraHeaders });
+    super(keys, { discover: !opts.models, discoverFreeOnly: true, freeOnly: true, ...opts, extraHeaders });
   }
 
-  protected checkFree(modelId: string): void {
-    if (!this.freeOnly || modelId.endsWith(":free")) return;
-    const spec = this.models.find((m) => m.id === modelId);
-    if (spec && spec.free) return;
-    throw new ConfigError(
-      `[openrouter] '${modelId}' is not a ':free' model. freelm is free-only by default — ` +
-        "pass new OpenRouter(key, { freeOnly: false }) to allow paid ids on your own account.",
-    );
-  }
-
-  rateLimitScope(body: string): "key" | "model" {
+  rateLimitScope(body: string): ErrorScope {
     // e.g. "<model> is temporarily rate-limited upstream". Deliberately narrow:
     // a bare "temporarily" also appears in account-wide 429s, which must cool
     // the key instead of hammering it with the next model.
     const b = (body || "").toLowerCase();
-    return b.includes("rate-limited upstream") ? "model" : "key";
+    return b.includes("rate-limited upstream") ? "upstream" : "key"; // throttled for everyone, not just this key
   }
 }

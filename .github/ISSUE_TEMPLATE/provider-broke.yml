@@ -1,0 +1,29 @@
+name: A provider or model stopped working
+description: Free tiers change often — tell us what broke so we can update the defaults/classifier.
+labels: [provider]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      placeholder: e.g. nim / meta/llama-3.3-70b-instruct
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `freelm doctor`
+      description: Keys are masked in the output; still double-check before pasting.
+      render: text
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message / status code and response body
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: freelm version and language
+      placeholder: e.g. Python 0.4.0 / npm 0.4.0
+    validations:
+      required: true

@@ -25,5 +25,5 @@ class Mistral(Provider):
     ]
 
     def __init__(self, keys, **kw):
-        kw.setdefault("discover", True)
+        kw.setdefault("discover", not kw.get("models"))  # an explicit models= list wins
         super().__init__(keys, **kw)
