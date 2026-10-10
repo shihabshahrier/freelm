@@ -166,6 +166,10 @@ keys, Cloudflare's Workers Paid plan past the daily free Neurons).
 and focused on surviving free-tier limits (per-key quotas, model benching, live free-model discovery). OpenRouter is
 one aggregator — freelm uses it as one pool and fails over to Gemini, Groq, Cloudflare and others directly.
 
+**What does a free-tier error mean?** The [error reference](https://shahriarlabs.com/products/freelm/errors/) explains the common ones (Gemini 429 and
+location errors, OpenRouter free-model limits, Groq, Mistral, Z.ai, empty replies from thinking models) with the fix
+for each.
+
 Full docs and a comparison with other free-LLM gateways: the
 [main README](https://github.com/shihabshahrier/freelm#readme) ·
 [Changelog](https://github.com/shihabshahrier/freelm/blob/main/CHANGELOG.md).

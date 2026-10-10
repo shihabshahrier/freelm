@@ -3,6 +3,25 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.2] - 2026-10-10
+
+### Fixed
+- **Gemini for new accounts.** Gemini 2.0 is shut down and 2.5 answers new
+  accounts with 404 "no longer available to new users". The built-in Gemini
+  list is now gemini-3.5-flash-lite, 3.1-flash-lite, flash-lite-latest,
+  3.5-flash, 3.7-flash and flash-latest, each verified live on the free tier.
+  Free Gemini quotas are per model, so the key-wide daily heuristic is gone.
+- **Gemini daily-quota 429s** name a `PerDay` quota id but suggest a ~30 s
+  `retryDelay`; freelm now rests that model for an hour instead of retrying
+  after 30 s into a spent daily cap.
+- "Invalid Auth key." and `ACCESS_TOKEN_TYPE_UNSUPPORTED` (Gemini's newer
+  `AQ.` keys) are treated as a dead key.
+- Groq's built-in fallback model is qwen/qwen3.8-27b.
+
+### Docs
+- README links an error reference: one guide per common free-tier error
+  (https://shahriarlabs.com/products/freelm/errors/).
+
 ## [0.5.1] - 2026-10-10
 
 Packaging, docs and one header change.
