@@ -56,7 +56,7 @@ export class ChatResponse {
 /** One observability event emitted via `new FreeLLM(provs, { onEvent })`.
  * `key` is always masked — never a raw API key. */
 export interface FreeLLMEvent {
-  kind: "attempt" | "success" | "error" | "wait" | "discovery";
+  kind: "attempt" | "hedge" | "success" | "error" | "wait" | "discovery";
   provider: string | null;
   key: string | null;
   model: string | null;

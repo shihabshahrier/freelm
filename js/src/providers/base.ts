@@ -7,6 +7,13 @@ import { ANONYMOUS, KeyState, newKeyState } from "../keys.js";
 import { ModelSpec, resolveModels } from "../registry.js";
 import { ChatResponse, Choice, usageFrom } from "../types.js";
 
+/** `smart` routing: a provider with no fresh latency sample is assumed to answer
+ * in LATENCY_PRIOR_MS (a typical free tier), and samples older than LATENCY_TTL
+ * are forgotten — so unknown providers get tried and a provider that was slow
+ * once is reconsidered after a while. */
+export const LATENCY_PRIOR_MS = 2000;
+export const LATENCY_TTL = 600;
+
 /** Workers AI sometimes sends a numeric token as a JSON number (`"content": 6`). */
 const asText = (v: any) => (typeof v === "number" ? String(v) : v);
 
@@ -238,6 +245,13 @@ export class Provider {
 
   capacity(now: number): number {
     return this.keys.reduce((s, k) => s + k.remaining(now), 0);
+  }
+
+  /** Routing estimate (ms) for the `smart` strategy: the average of this
+   * provider's fresh latency samples, else LATENCY_PRIOR_MS. */
+  expectedLatency(now: number): number {
+    const v = this.keys.filter((k) => k.ewmaLatency > 0 && now - k.latencyAt < LATENCY_TTL).map((k) => k.ewmaLatency);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : LATENCY_PRIOR_MS;
   }
 
   avgLatency(): number {

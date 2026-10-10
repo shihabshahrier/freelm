@@ -84,7 +84,7 @@ from freelm import FreeLLM, GoogleAIStudio, Groq, OpenRouter
 
 llm = FreeLLM(
     [GoogleAIStudio("AIza..."), Groq("gsk_..."), OpenRouter("sk-or-...")],   # or FreeLLM.from_env()
-    strategy="quota_aware",   # priority | round_robin | quota_aware | latency
+    strategy="smart",         # smart (default) | priority | round_robin | quota_aware | latency
 )
 
 r = llm.chat([{"role": "user", "content": "Write a haiku about failover."}], model="chat:fast")
@@ -139,15 +139,16 @@ See the
 | Google AI Studio (Gemini) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` | Most generous free tier; per-model limits. Pro models have no free quota. |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) | `GROQ_API_KEY` | Very fast; per model 30 req/min, 1K req/day. Not xAI's "Grok" (that one is paid). |
 | OpenRouter | [openrouter.ai/keys](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` | `:free` models + the `openrouter/free` router only (guarded); 20 req/min, 50 req/day (1000/day after $10 of lifetime credit). |
-| Cloudflare Workers AI | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 10,000 Neurons/day free on every account (a few hundred chats); Llama 4 Scout, gpt-oss, Qwen 3.8, Gemma 4, GLM-4.7-Flash. Token needs Workers AI permission. |
-| Z.ai (GLM) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` | GLM-4.7-Flash, GLM-4.5-Flash and GLM-4.6V-Flash (vision) are free; other GLM models are paid, so they're blocked (guarded). |
-| Cohere | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` | Command A / A+ on a free **trial** key: 20 req/min per model, 1,000 calls/month, non-commercial use. |
+| Cloudflare Workers AI (beta) | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 10,000 Neurons/day free on every account (a few hundred chats); Llama 4 Scout, gpt-oss, Qwen 3.8, Gemma 4, GLM-4.7-Flash. Token needs Workers AI permission. |
+| Z.ai (GLM) (beta) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` | GLM-4.7-Flash, GLM-4.5-Flash and GLM-4.6V-Flash (vision) are free; other GLM models are paid, so they're blocked (guarded). |
+| Cohere (beta) | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` | Command A / A+ on a free **trial** key: 20 req/min per model, 1,000 calls/month, non-commercial use. |
 | Kilo Gateway | [app.kilo.ai](https://app.kilo.ai) (optional) | `KILO_API_KEY` | Free routes (`:free`, `kilo-auto/free`) work **without a key** (~200 req/hour per IP); a free account lifts that. Free-only guard on. |
 | OVHcloud AI Endpoints | none — anonymous | — | Keyless, 2 req/min per IP per model; last-resort fallback. (An OVH key is pay-as-you-go, so freelm doesn't use one.) |
 | Cerebras | [cloud.cerebras.ai](https://cloud.cerebras.ai) | `CEREBRAS_API_KEY` | ⚠️ No longer permanently free (trial credits, card required) — supported if you already have a key. |
 | Mistral | [console.mistral.ai](https://console.mistral.ai/api-keys) | `MISTRAL_API_KEY` | "Experiment" plan; low requests/minute. |
 | NVIDIA NIM | [build.nvidia.com](https://build.nvidia.com/settings/api-keys) | `NVIDIA_API_KEY` | Free against build credits. |
 
+*Beta* = added in 0.5.0 and not yet verified with live keys — `freelm doctor` tells you if yours works.
 Several keys per provider: comma-separate them or use `FREELM_<PROVIDER>_KEYS`. The library never uses the
 keyless endpoints unless asked — `FreeLLM.from_env(keyless=True)` (always, as last resorts), `keyless="auto"`
 (only when no keys are set — the CLI's default) or `FREELM_KEYLESS=1|auto|0`. Any other OpenAI-compatible endpoint
@@ -159,6 +160,11 @@ and `freelm doctor` tells you what works right now. The built-in fallback model 
 
 ## How it stays up
 
+- **A slow or hung provider doesn't hold the call.** When an attempt is still running after a few seconds (3× that
+  provider's usual latency, clamped; ~3 s for a stream's first token, ~6 s for a whole answer when it's unknown), the
+  next provider starts in parallel and the first answer wins — the slow one is cancelled and remembered.
+- **Smart routing (default):** providers are ranked by measured latency, so a fast one serves first and a slow one
+  drops back; an unknown provider counts as typical so it gets tried, and old measurements expire after 10 minutes.
 - **Every failure fails over.** 429 → rotate the key (or just bench the model, where quotas are per-model: Gemini,
   Groq, Z.ai, Cohere; a key whose daily or monthly quota is spent rests instead of being retried every minute);
   5xx / timeouts → circuit breaker + backoff; 401/402 → disable that key; a retired model (404/410) → bench it
@@ -191,11 +197,12 @@ Bias selection with `prefer=["gemini-2.5-flash", "gpt-oss"]` (exact id or substr
 
 | `FreeLLM(...)` option | Default | |
 |---|---|---|
-| `strategy` | `"priority"` | `priority` · `round_robin` · `quota_aware` · `latency` |
+| `strategy` | `"smart"` | `smart` (priority tiers, then fastest measured) · `priority` · `round_robin` · `quota_aware` · `latency` |
+| `hedge` | `True` | race a slow attempt against the next provider: `True` = adaptive delay, seconds = fixed, `False` = one at a time |
 | `max_attempts` | `12` | cap on tries across providers/keys/models per call |
 | `timeout` | `60` | seconds; also the overall deadline for one call |
 | `wait` / `max_wait` | `False` / `20` | sleep until a key frees up instead of failing |
-| `on_event` | — | callback for `attempt` / `success` / `error` / `wait` / `discovery` events (keys masked) |
+| `on_event` | — | callback for `attempt` / `hedge` / `success` / `error` / `wait` / `discovery` events (keys masked) |
 | `persist` | `False` (`FREELM_PERSIST=1`) | keep quota/cooldown/disabled-key state across restarts (`~/.cache/freelm/state.json`, 0600, key hashes only) |
 
 Provider options: `tier`, `priority`, `prefer`, `models`, `rpm`/`rpd`, `discover`, `free_only` (OpenRouter defaults
@@ -261,6 +268,13 @@ anonymous tier. Limits are low and free routes may log prompts; one free Gemini 
 Free model ids are retired constantly (NVIDIA retired its Llama 3.x endpoints on 2026-08-26; Groq retired Llama 3.3 70B
 on 2026-08-16). freelm discovers current models live, benches retired ones on the first 404/410 and fails over, so
 your code keeps working; `freelm doctor` shows which keys and models work today.
+
+### How fast is failover?
+An error (429, 5xx, bad key, retired model) fails over immediately — the cost is one extra round trip, usually well
+under a second. A provider that hangs or answers slowly is raced: after a few seconds the next provider starts in
+parallel and the first answer wins (measured: a hung provider ahead of a healthy one answers in ~6 s, a stalled
+stream in ~3 s). After that, smart routing sends calls to the fast provider first, so later calls don't wait at all.
+A host that won't accept a connection fails within 10 s.
 
 ### How do I avoid free-tier rate limits (429)?
 Add more providers and keys: freelm paces each key, rotates on 429, benches per-model quotas (Gemini, Groq) and

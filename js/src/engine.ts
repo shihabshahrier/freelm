@@ -20,6 +20,24 @@ export const MODEL_THROTTLE_TTL = 60;
 export const MODEL_OVERLOAD_TTL = 30;
 /** A request rejected (BadRequest) by this many distinct providers is a caller bug. */
 export const REJECTIONS_TO_RAISE = 2;
+/** Hedging: an attempt still running after this long gets a parallel one on the
+ * next candidate, and the first answer wins. Adaptive: 3x the key's latency
+ * average, clamped — [floor, cap, unmeasured] in seconds. Streams race to the
+ * first token, so they hedge sooner than whole responses. */
+export const HEDGE_STREAM: readonly [number, number, number] = [1.5, 6, 3];
+export const HEDGE_CHAT: readonly [number, number, number] = [4, 12, 6];
+
+/** Seconds after which a still-running attempt on `c` gets a parallel hedge,
+ * or null. `setting` is the client's `hedge`: true = adaptive, a number = fixed
+ * seconds, false/0 = off. */
+export function hedgeDelay(c: Candidate, setting: boolean | number | null | undefined, stream: boolean): number | null {
+  if (setting === null || setting === undefined || setting === false) return null;
+  if (setting !== true) return setting > 0 ? setting : null;
+  const [floor, cap, unmeasured] = stream ? HEDGE_STREAM : HEDGE_CHAT;
+  const ewma = c.key.ewmaLatency;
+  if (ewma <= 0) return unmeasured;
+  return Math.min(cap, Math.max(floor, (3 * ewma) / 1000));
+}
 
 const SEP = "\u0000";
 
@@ -116,14 +134,22 @@ export function providerStatus(providers: any[], now: number): string[] {
   return out;
 }
 
-export function applySuccess(c: Candidate, latencyMs: number): void {
+export function applySuccess(c: Candidate, latencyMs: number, now?: number): void {
   const k = c.key;
   k.breaker.onSuccess();
   k.lastError = null;
   if (latencyMs > 0) {
     // <=0 means "no sample" (e.g. an empty stream) — don't decay the EWMA
     k.ewmaLatency = k.ewmaLatency === 0 ? latencyMs : 0.7 * k.ewmaLatency + 0.3 * latencyMs;
+    if (now !== undefined) k.latencyAt = now;
   }
+}
+
+/** A hedge beat this attempt. Not an error — but the key was at least this
+ * slow, so `smart` routing puts it behind faster ones for a while. */
+export function applySlow(c: Candidate, elapsedMs: number, now: number): void {
+  c.key.ewmaLatency = Math.max(c.key.ewmaLatency, elapsedMs);
+  c.key.latencyAt = now;
 }
 
 function refund(k: any): void {

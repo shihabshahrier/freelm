@@ -3,9 +3,33 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-10
 
-### Added — three more free providers
+### Added — failover that doesn't wait
+- **Hedged attempts** (`hedge=True`, the default): when an attempt is still
+  running after a few seconds — 3x that key's usual latency, clamped (streams:
+  1.5–6 s, 3 s unmeasured; whole answers: 4–12 s, 6 s unmeasured) — the next
+  candidate starts in parallel and the first answer wins. The loser is
+  cancelled and remembered as slow. Before, a provider that hung (or a host that
+  never accepted the connection, or a stream that stalled before its first
+  token) held the call for the whole 60 s deadline and the call **failed**
+  without trying the healthy provider behind it. Measured on real HTTP: hang
+  → 6.3 s (was a 60 s failure), stalled stream → 3.3 s. `hedge=False` restores
+  one attempt at a time; a number sets a fixed delay. New event kind: `hedge`.
+- **`smart` routing, the new default strategy**: priority tiers first, then the
+  fastest measured provider. A provider without a fresh sample counts as
+  typical (2 s), so unknown providers get tried and measured; samples expire
+  after 10 minutes, so a provider that was slow once is reconsidered. A slow
+  provider (8 s) used to cost 8 s on every call; now only the first.
+  `strategy="priority"` keeps the old fixed order.
+
+### Changed
+- The sync client discovers every provider's models in parallel (the async
+  clients already did): first call with 6 catalogs to fetch 4.6 s → 0.3 s.
+- Python: a host that won't accept the connection fails within 10 s (connect
+  timeout), like Node's fetch, instead of using the whole call deadline.
+
+### Added — three more free providers (beta: not yet verified with live keys)
 - **Cloudflare Workers AI** (`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`):
   10,000 Neurons/day free on every account (a few hundred chats), with curated
   Free-plan `@cf/...` models — Llama 4 Scout, Mistral Small 3.1, gpt-oss,

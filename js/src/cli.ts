@@ -1,6 +1,6 @@
 /** freelm CLI — chat / models / health / doctor / serve (npx freelm ...).
  *
- *   freelm chat "explain failover in one line" [--model auto] [--stream] [--strategy priority]
+ *   freelm chat "explain failover in one line" [--model auto] [--stream] [--strategy smart]
  *   freelm models [--provider openrouter]
  *   freelm health
  *   freelm doctor [--json]                    # live-check every key, with fixes
@@ -50,7 +50,7 @@ class UsageError extends Error {}
 const keyless = () => env("FREELM_KEYLESS") || "auto";
 
 function strategyOf(v: unknown): Strategy {
-  const s = String(v ?? "priority");
+  const s = String(v ?? "smart");
   if (!STRATEGIES.includes(s as Strategy)) throw new UsageError(`unknown strategy '${s}' (pick one of ${STRATEGIES.join(", ")})`);
   return s as Strategy;
 }

@@ -64,7 +64,18 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   order candidates by strategy, interleave breadth-first across providers
   (rank 0 of every provider before any rank 1), skip `tried`, `reserve()` a
   token, fire, classify the outcome, repeat up to `max_attempts` within a
-  `timeout` deadline.
+  `timeout` deadline. The loop is a **race** (`_race`/`race`): one attempt at a
+  time, plus at most one parallel *hedge* when the running attempt outlives
+  `engine.hedge_delay` (3x the key's latency EWMA, clamped; `HEDGE_STREAM` /
+  `HEDGE_CHAT`); first success wins, losers are cancelled (async task /
+  AbortController; sync: daemon thread, result released when it lands) and an
+  earlier-started loser is marked slow (`apply_slow`). All key/engine state
+  changes happen on the caller's thread/task — workers only do HTTP. A stream
+  races to its first emittable item (`_open`/`openStream`), then the winner's
+  generator continues on the caller. Attempts still running at the deadline are
+  recorded as `Transient` timeouts (so the key cools). Default strategy is
+  `smart`: (priority, `expected_latency`) where an unmeasured/stale (>10 min)
+  provider counts as `LATENCY_PRIOR_MS`.
 - **Error taxonomy** (`classify()`) — *no status aborts a call on its own*:
   401/403 (and 400 "API key not valid"/location errors) `AuthError` and 402
   (or a 429 saying the quota is gone "/ month") `QuotaExhausted` → disable
@@ -117,7 +128,7 @@ first (which keys work today), then `examples/e2e_smoke.py` /
   defaults to `auto` (only when no keys are set) and prints a notice. Never
   route prompts to them silently. OVHcloud never takes a key (paid there).
 - **Events**: clients accept `on_event`/`onEvent`; emit kinds
-  `attempt|success|error|wait|discovery`, masked keys only, and swallow callback
+  `attempt|hedge|success|error|wait|discovery`, masked keys only, and swallow callback
   exceptions.
 - **Persistence** (`_state.py`/`state.ts`): opt-in (`persist=`/`FREELM_PERSIST`),
   one JSON schema shared by both languages (`provider:sha256(key)[:12]` →

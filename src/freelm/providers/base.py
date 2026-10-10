@@ -14,6 +14,13 @@ from .._types import ChatResponse, Choice, Message, Usage
 from ..errors import ConfigError
 from ..registry import ModelSpec, resolve_models
 
+# ``smart`` routing: a provider with no fresh latency sample is assumed to answer
+# in LATENCY_PRIOR_MS (a typical free tier), and samples older than LATENCY_TTL
+# are forgotten — so unknown providers get tried and a provider that was slow
+# once is reconsidered after a while.
+LATENCY_PRIOR_MS = 2000.0
+LATENCY_TTL = 600.0
+
 
 def _as_text(v: Any) -> Any:
     """Workers AI sometimes sends a numeric token as a JSON number (``"content": 6``)."""
@@ -233,6 +240,12 @@ class Provider:
     # -- routing helpers -------------------------------------------------
     def capacity(self, now: float) -> float:
         return sum(k.remaining(now) for k in self.keys)
+
+    def expected_latency(self, now: float) -> float:
+        """Routing estimate (ms) for the ``smart`` strategy: the average of this
+        provider's fresh latency samples, else ``LATENCY_PRIOR_MS``."""
+        vals = [k.ewma_latency for k in self.keys if k.ewma_latency > 0 and now - k.latency_at < LATENCY_TTL]
+        return sum(vals) / len(vals) if vals else LATENCY_PRIOR_MS
 
     def avg_latency(self) -> float:
         vals = [k.ewma_latency for k in self.keys if k.ewma_latency > 0]

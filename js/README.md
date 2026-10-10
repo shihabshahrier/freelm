@@ -60,7 +60,7 @@ import { FreeLLM, GoogleAIStudio, Groq, OpenRouter } from "freelm";
 
 const llm = new FreeLLM(
   [new GoogleAIStudio("AIza..."), new Groq("gsk_..."), new OpenRouter("sk-or-...")],
-  { strategy: "quota_aware" },   // priority | round_robin | quota_aware | latency
+  { strategy: "smart" },   // smart (default) | priority | round_robin | quota_aware | latency
 );
 
 const r = await llm.chat([{ role: "user", content: "Write a haiku about failover." }], { model: "chat:fast" });
@@ -96,9 +96,9 @@ for await (const chunk of stream) process.stdout.write(chunk.choices[0].delta.co
 | Google AI Studio | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `FREELM_GOOGLE_KEYS` |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) | `GROQ_API_KEY` / `FREELM_GROQ_KEYS` |
 | OpenRouter (`:free` models) | [openrouter.ai/keys](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` / `FREELM_OPENROUTER_KEYS` |
-| Cloudflare Workers AI (10,000 Neurons/day) | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` / `FREELM_CLOUDFLARE_KEYS` **+** `CLOUDFLARE_ACCOUNT_ID` |
-| Z.ai (free GLM Flash models only, guarded) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` / `FREELM_ZAI_KEYS` |
-| Cohere (trial key: free, non-commercial) | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` / `CO_API_KEY` / `FREELM_COHERE_KEYS` |
+| Cloudflare Workers AI (beta; 10,000 Neurons/day) | [dash.cloudflare.com](https://dash.cloudflare.com/profile/api-tokens) | `CLOUDFLARE_API_TOKEN` / `FREELM_CLOUDFLARE_KEYS` **+** `CLOUDFLARE_ACCOUNT_ID` |
+| Z.ai (beta; free GLM Flash models only, guarded) | [z.ai](https://z.ai/manage-apikey/apikey-list) | `ZAI_API_KEY` / `FREELM_ZAI_KEYS` |
+| Cohere (beta; trial key: free, non-commercial) | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) | `COHERE_API_KEY` / `CO_API_KEY` / `FREELM_COHERE_KEYS` |
 | Kilo Gateway (works keyless) | [app.kilo.ai](https://app.kilo.ai) | `KILO_API_KEY` / `FREELM_KILO_KEYS` (optional) |
 | OVHcloud AI Endpoints | none — anonymous only | — |
 | Cerebras (trial credits, no longer permanently free) | [cloud.cerebras.ai](https://cloud.cerebras.ai) | `CEREBRAS_API_KEY` / `FREELM_CEREBRAS_KEYS` |
@@ -117,6 +117,11 @@ overloaded models on the first 404/410/503 instead of retrying them.
 
 ## Reliability, observability, persistence
 
+- A slow or hung provider doesn't hold the call: after a few seconds (3× its usual latency, clamped; ~3 s for a
+  stream's first token) the next provider starts in parallel and the first answer wins — the slow request is aborted
+  and remembered. `{ hedge: false }` = one attempt at a time; `{ hedge: 2 }` = fixed 2 s.
+- Smart routing (default `strategy`): providers ranked by measured latency; unknown ones count as typical so they get
+  tried; measurements expire after 10 minutes.
 - Every failure fails over: 429 → rotate key (or bench just the model where quotas are per-model); 5xx/timeouts →
   breaker + backoff; 401/402 → disable key; retired model → bench it; one provider rejecting a request → next
   provider (raised only if two providers reject it). Breadth-first across providers, so none can stall a call.

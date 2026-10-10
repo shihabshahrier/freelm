@@ -3,7 +3,7 @@ import { ConfigError } from "./errors.js";
 import type { KeyState } from "./keys.js";
 import { isVirtual } from "./registry.js";
 
-export const STRATEGIES = ["priority", "round_robin", "quota_aware", "latency"] as const;
+export const STRATEGIES = ["smart", "priority", "round_robin", "quota_aware", "latency"] as const;
 export type Strategy = (typeof STRATEGIES)[number];
 
 export interface Candidate {
@@ -57,6 +57,10 @@ export function orderCandidates(
   } else if (strategy === "latency") {
     // Infinity - Infinity is NaN (falsy) -> the priority tiebreak kicks in
     provs.sort((a, b) => a.avgLatency() - b.avgLatency() || a.priority - b.priority);
+  } else if (strategy === "smart") {
+    // priority tiers first; within a tier the fastest measured provider — an
+    // unknown one counts as typical, so it gets tried and measured
+    provs.sort((a, b) => a.priority - b.priority || a.expectedLatency(now) - b.expectedLatency(now));
   } else {
     provs.sort((a, b) => a.priority - b.priority);
   }
