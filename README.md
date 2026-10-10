@@ -40,7 +40,7 @@ anonymous tier) and says so. Their limits are low and free routes may log prompt
    ```text
    $ freelm doctor
      openrouter  sk-or-...a1b2    FAIL  key rejected (401): User not found. — get a new free key: https://openrouter.ai/keys
-     google      AIzaSy...x9yz    OK    gemini-2.5-flash-lite · 1131 ms
+     google      AIzaSy...x9yz    OK    gemini-3.5-flash-lite · 1131 ms
      groq        gsk_ab...cd12    FAIL  key rejected (401): Invalid API Key — get a new free key: https://console.groq.com/keys
    1 of 3 key(s) working — ready: google
    ```

@@ -191,6 +191,9 @@ _TOO_BIG_HINTS = (
 _AUTH_HINTS = (
     "api key not valid", "api_key_invalid", "api key expired", "api_key_expired",
     "invalid api key", "invalid_api_key", "incorrect api key",
+    # Gemini's newer "AQ." auth keys: "Invalid Auth key." on the OpenAI endpoint,
+    # ACCESS_TOKEN_TYPE_UNSUPPORTED when a client sends one the old way
+    "invalid auth key", "access_token_type_unsupported",
 )
 # A 403 about the *content* (OpenRouter moderation), not the key.
 _MODERATION_HINTS = ("flagged", "moderation")
@@ -204,6 +207,10 @@ _PLAN_HINTS = ("workers paid", "paid plan")
 _MONTHLY_HINTS = ("/ month", "per month", "monthly limit", "monthly quota")
 _DAILY_HINTS = ("per day", "per-day", "daily free allocation", "daily limit", "daily quota")
 DAILY_QUOTA_RETRY = 3600.0
+# Gemini names the violated quota (quotaId "GenerateRequestsPerDayPerProjectPerModel-
+# FreeTier") but still suggests a ~30 s retryDelay; for a daily cap that just
+# burns requests, so a PerDay quota id rests for at least DAILY_QUOTA_RETRY.
+_DAILY_QUOTA_IDS = ("perdayperproject", "permodelperday")
 # Google AI Studio refuses whole regions with a 400.
 _LOCATION_HINTS = ("location is not supported", "unsupported_country", "not available in your country")
 # Google puts the server-suggested wait in the JSON body: "retryDelay": "36s"
@@ -238,6 +245,8 @@ def classify(status: int, headers: Optional[Dict[str, str]], body: str, provider
             return QuotaExhausted(provider, status, msg)
         if retry_after is None and any(h in low for h in _DAILY_HINTS):
             retry_after = DAILY_QUOTA_RETRY
+        elif any(h in low for h in _DAILY_QUOTA_IDS):
+            retry_after = max(retry_after or 0.0, DAILY_QUOTA_RETRY)
         return RateLimited(provider, status, msg, retry_after=retry_after)
     if status in _TRANSIENT_STATUS or 500 <= status <= 599:
         return Transient(provider, status, msg, retry_after=retry_after)

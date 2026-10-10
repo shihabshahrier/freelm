@@ -21,7 +21,7 @@ class Groq(Provider):
     # accounts on 2026-08-16; these are Groq's named successors (deprecations
     # page, checked 2026-10). Live discovery replaces this list at runtime.
     DEFAULT_MODELS = [
-        ModelSpec("qwen/qwen3.6-27b", ("chat", "tools")),
+        ModelSpec("qwen/qwen3.8-27b", ("chat", "tools")),
         ModelSpec("openai/gpt-oss-120b", ("chat", "large", "tools", "reasoning"), ctx=131072),
         ModelSpec("openai/gpt-oss-20b", ("chat", "small", "fast", "tools", "reasoning"), ctx=131072),
     ]

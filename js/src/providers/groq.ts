@@ -15,7 +15,7 @@ export class Groq extends Provider {
   // accounts on 2026-08-16; these are Groq's named successors (deprecations
   // page, checked 2026-10). Live discovery replaces this list at runtime.
   static defaultModels: ModelSpec[] = [
-    modelSpec("qwen/qwen3.6-27b", ["chat", "tools"]),
+    modelSpec("qwen/qwen3.8-27b", ["chat", "tools"]),
     modelSpec("openai/gpt-oss-120b", ["chat", "large", "tools", "reasoning"], 131072),
     modelSpec("openai/gpt-oss-20b", ["chat", "small", "fast", "tools", "reasoning"], 131072),
   ];
