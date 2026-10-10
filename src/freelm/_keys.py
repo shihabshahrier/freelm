@@ -27,6 +27,7 @@ class KeyState:
     disabled: bool = False              # hard-off after auth failure
     disabled_since_wall: float = 0.0    # wall-clock ts it was disabled (persistence TTL)
     ewma_latency: float = 0.0
+    latency_at: float = 0.0             # monotonic ts of the last latency sample
     last_error: Optional[str] = None
     # model id -> monotonic ts until which this key must not use that model
     # (its own per-model quota hit, no access to the model, ...)

@@ -99,7 +99,8 @@ class ChatResponse:
 class Event:
     """One observability event emitted via ``FreeLLM(on_event=...)``.
 
-    ``kind`` is ``"attempt" | "success" | "error" | "wait" | "discovery"``.
+    ``kind`` is ``"attempt" | "hedge" | "success" | "error" | "wait" | "discovery"``
+    (``hedge``: a parallel attempt started because the running one is slow).
     ``key`` is always masked — never a raw API key.
     """
 

@@ -47,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("chat", help="send a prompt and print the reply")
     c.add_argument("prompt", help="the user prompt")
     c.add_argument("--model", default="auto", help="virtual alias or concrete model id (default: auto)")
-    c.add_argument("--strategy", default="priority", choices=STRATEGIES, help="provider ranking strategy")
+    c.add_argument("--strategy", default="smart", choices=STRATEGIES, help="provider ranking strategy")
     c.add_argument("--stream", action="store_true", help="stream tokens as they arrive")
 
     m = sub.add_parser("models", help="list available (discovered) models per provider")
@@ -64,7 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=int(os.getenv("FREELM_PORT") or "4000"), help="port (default: 4000)")
     s.add_argument("--api-key", default=os.getenv("FREELM_SERVER_KEY"),
                    help="require this bearer token from clients (env FREELM_SERVER_KEY)")
-    s.add_argument("--strategy", default="priority", choices=STRATEGIES, help="provider ranking strategy")
+    s.add_argument("--strategy", default="smart", choices=STRATEGIES, help="provider ranking strategy")
     s.add_argument("--cors", action="store_true", help="allow browser apps on other origins")
     s.add_argument("--no-fallback", action="store_true",
                    help="don't serve unknown model ids (e.g. a tool's default 'gpt-4o') with 'auto'")

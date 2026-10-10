@@ -25,6 +25,43 @@ export interface FreeLLMOptions {
   /** Persist rpd counters / cooldowns / disabled keys across restarts
    * (~/.cache/freelm/state.json). Defaults to the FREELM_PERSIST env var. */
   persist?: boolean;
+  /** Race a slow attempt: when it is still running after the hedge delay, the
+   * next candidate starts in parallel and the first answer wins. `true`
+   * (default) = adaptive delay, a number = fixed seconds, `false` = sequential. */
+  hedge?: boolean | number;
+}
+
+/** One in-flight attempt of a call. */
+interface Run<T> {
+  cand: Candidate;
+  t0: number;
+  ac: AbortController;
+  unlink: () => void;
+  done: Promise<Settled<T>>;
+}
+type Settled<T> = { run: Run<T>; ok: true; value: T } | { run: Run<T>; ok: false; error: unknown };
+
+/** A stream read up to its first emittable item. */
+interface Opened {
+  gen: AsyncGenerator<Record<string, any>>;
+  items: any[];
+  done: boolean;
+  firstMs: number;
+}
+
+/** The first of `promises` to settle, or null after `ms` (null = no limit). */
+async function raceTimeout<T>(promises: Promise<T>[], ms: number | null): Promise<T | null> {
+  if (ms === null) return Promise.race(promises);
+  let timer: any;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+    unref(timer);
+  });
+  try {
+    return await Promise.race([...promises, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Per-call options: `model` (alias, concrete id, or ordered fallback list),
@@ -176,6 +213,7 @@ export class FreeLLM {
   timeout: number;
   wait: boolean;
   maxWait: number;
+  hedge: boolean | number;
   private rr = { p: 0 };
   private discovering: Promise<void> | null = null;
   private onEvent?: (e: FreeLLMEvent) => void;
@@ -183,7 +221,7 @@ export class FreeLLM {
 
   constructor(providers: Provider[], opts: FreeLLMOptions = {}) {
     if (!providers.length) throw new ConfigError("FreeLLM needs at least one provider");
-    this.strategy = opts.strategy ?? "priority";
+    this.strategy = opts.strategy ?? "smart";
     if (!STRATEGIES.includes(this.strategy as Strategy)) {
       throw new ConfigError(`unknown strategy ${this.strategy}; pick one of ${STRATEGIES.join(", ")}`);
     }
@@ -192,6 +230,10 @@ export class FreeLLM {
     this.timeout = opts.timeout ?? 60;
     this.wait = opts.wait ?? false;
     this.maxWait = opts.maxWait ?? 20;
+    this.hedge = opts.hedge ?? true;
+    if (typeof this.hedge !== "boolean" && !(typeof this.hedge === "number" && this.hedge >= 0)) {
+      throw new ConfigError("hedge must be true (adaptive), a delay in seconds, or false");
+    }
     this.onEvent = opts.onEvent;
     const persist = opts.persist ?? ["1", "true", "yes"].includes((env("FREELM_PERSIST") ?? "").toLowerCase());
     if (persist) {
@@ -313,9 +355,122 @@ export class FreeLLM {
   }
 
   private recordSuccess(cand: Candidate, latencyMs: number, attempts: Array<[Candidate, Error]>): void {
-    engine.applySuccess(cand, latencyMs);
+    engine.applySuccess(cand, latencyMs, nowS());
     this.emit("success", { cand, latencyMs, attempt: attempts.length + 1 });
     this.saveState();
+  }
+
+  /** The next candidate to start (its rpm token reserved), or null. */
+  private pick(req: ChatRequest, tried: Set<string>, attempts: Array<[Candidate, Error]>, running: number, now: number): Candidate | null {
+    while (attempts.length + running < this.maxAttempts) {
+      const cand = engine.selectCandidate(this.providers, this.strategy, this.rr, req.model, tried, now, engine.rejectedBy(attempts));
+      if (!cand) return null;
+      tried.add(engine.triedKey(cand));
+      if (cand.key.reserve(now)) return cand;
+    }
+    return null;
+  }
+
+  /** When the single running attempt gets a parallel hedge (monotonic s), or null. */
+  private hedgeAt(running: Array<{ cand: Candidate; t0: number }>, stream: boolean): number | null {
+    if (running.length !== 1) return null;
+    const d = engine.hedgeDelay(running[0].cand, this.hedge, stream);
+    return d === null ? null : running[0].t0 + d;
+  }
+
+  /** Run attempts until one succeeds. One at a time; when it is still running
+   * after the hedge delay (`hedge`), the next candidate starts in parallel and
+   * the first answer wins — the others are aborted. `work(cand, signal)` does
+   * the HTTP; `cleanup(result)` releases a result that lost the race (an open
+   * stream). `release()` unlinks the caller's signal from the winner. */
+  private async race<T>(
+    req: ChatRequest,
+    deadline: number | null,
+    signal: AbortSignal | undefined,
+    stream: boolean,
+    work: (cand: Candidate, signal: AbortSignal) => Promise<T>,
+    cleanup?: (result: T) => unknown,
+  ): Promise<{ cand: Candidate; result: T; attempts: Array<[Candidate, Error]>; release: () => void }> {
+    const attempts: Array<[Candidate, Error]> = [];
+    let tried = new Set<string>();
+    const running: Run<T>[] = [];
+    let blocked = false; // a hedge was due but no candidate was ready
+    const start = (cand: Candidate): Run<T> => {
+      const ac = new AbortController();
+      const run = { cand, t0: nowS(), ac, unlink: link(signal, ac) } as Run<T>;
+      run.done = work(cand, ac.signal).then(
+        (value) => ({ run, ok: true as const, value }),
+        (error) => ({ run, ok: false as const, error }),
+      );
+      return run;
+    };
+    // Leave attempts that lost the race (or outlived the call). One that
+    // started before the winner was slower than it: remember that.
+    const abandon = (winnerT0: number | null) => {
+      const now = nowS();
+      for (const r of running.splice(0)) {
+        if (winnerT0 !== null && r.t0 < winnerT0) engine.applySlow(r.cand, (now - r.t0) * 1000, now);
+        r.ac.abort();
+        r.unlink();
+        void r.done.then((s) => {
+          if (!s.ok || !cleanup) return;
+          try {
+            Promise.resolve(cleanup(s.value)).catch(() => {});
+          } catch {
+            /* best effort */
+          }
+        });
+      }
+    };
+    try {
+      for (;;) {
+        throwIfAborted(signal);
+        const now = nowS();
+        if (deadline !== null && now >= deadline) break;
+        let hedgeAt = blocked ? null : this.hedgeAt(running, stream);
+        if (!running.length || (hedgeAt !== null && now >= hedgeAt)) {
+          const cand = this.pick(req, tried, attempts, running.length, now);
+          if (cand) {
+            this.emit(running.length ? "hedge" : "attempt", { cand, attempt: attempts.length + running.length + 1 });
+            running.push(start(cand));
+            continue;
+          }
+          if (!running.length) {
+            const w = this.waitFor(now, deadline, req.model, tried, attempts);
+            if (w === null) break;
+            this.emit("wait", { latencyMs: w * 1000, attempt: attempts.length });
+            await sleep((w + 0.01) * 1000, signal);
+            tried = engine.forgetRecovered(this.providers, tried, nowS());
+            continue;
+          }
+          blocked = true;
+          hedgeAt = null;
+        }
+        const wake = [deadline, hedgeAt].filter((t): t is number => t !== null);
+        const settled = await raceTimeout(
+          running.map((r) => r.done),
+          wake.length ? Math.max(0, (Math.min(...wake) - now) * 1000) : null,
+        );
+        if (!settled) continue;
+        running.splice(running.indexOf(settled.run), 1);
+        blocked = false;
+        if (settled.ok) {
+          abandon(settled.run.t0);
+          return { cand: settled.run.cand, result: settled.value, attempts, release: settled.run.unlink };
+        }
+        settled.run.unlink();
+        const e = settled.error;
+        if (!(e instanceof ProviderError)) throw e; // e.g. the caller aborted
+        this.recordError(settled.run.cand, e, attempts);
+        if (engine.shouldRaise(e, attempts)) throw e;
+      }
+      for (const r of running) {
+        this.recordError(r.cand, new Transient(r.cand.provider.name, 0, "timeout: no answer within the call's deadline"), attempts);
+      }
+      throw engine.exhausted(attempts, this.providers, nowS());
+    } finally {
+      abandon(null);
+    }
   }
 
   async chat(messages: MessageLike | MessageLike[], opts: ChatOptions = {}): Promise<ChatResponse> {
@@ -325,42 +480,12 @@ export class FreeLLM {
     await this.ensureDiscovered();
     const req = buildRequest(messages, model, params);
     const deadline = this.timeout ? nowS() + this.timeout : null;
-    const attempts: Array<[Candidate, Error]> = [];
-    let tried = new Set<string>();
-
-    while (attempts.length < this.maxAttempts) {
-      throwIfAborted(signal);
-      const now = nowS();
-      if (deadline !== null && now >= deadline) break;
-      const cand = engine.selectCandidate(
-        this.providers, this.strategy, this.rr, req.model, tried, now, engine.rejectedBy(attempts),
-      );
-      if (!cand) {
-        const w = this.waitFor(now, deadline, req.model, tried, attempts);
-        if (w === null) break;
-        this.emit("wait", { latencyMs: w * 1000, attempt: attempts.length });
-        await sleep((w + 0.01) * 1000, signal);
-        tried = engine.forgetRecovered(this.providers, tried, nowS());
-        continue;
-      }
-
-      tried.add(engine.triedKey(cand));
-      if (!cand.key.reserve(now)) continue;
-
-      this.emit("attempt", { cand, attempt: attempts.length + 1 });
-      let resp: ChatResponse;
-      try {
-        resp = await this.doRequest(cand, req, deadline, signal);
-      } catch (e) {
-        if (!(e instanceof ProviderError)) throw e; // e.g. the caller aborted
-        this.recordError(cand, e, attempts);
-        if (engine.shouldRaise(e, attempts)) throw e;
-        continue;
-      }
-      this.recordSuccess(cand, resp.latencyMs, attempts);
-      return resp;
-    }
-    throw engine.exhausted(attempts, this.providers, nowS());
+    const { cand, result, attempts, release } = await this.race(req, deadline, signal, false, (c, s) =>
+      this.doRequest(c, req, deadline, s),
+    );
+    release();
+    this.recordSuccess(cand, result.latencyMs, attempts);
+    return result;
   }
 
   async text(messages: MessageLike | MessageLike[], opts: ChatOptions = {}): Promise<string> {
@@ -427,65 +552,64 @@ export class FreeLLM {
     await this.ensureDiscovered();
     const req = buildRequest(messages, model, params);
     const deadline = this.timeout ? nowS() + this.timeout : null;
-    const attempts: Array<[Candidate, Error]> = [];
-    let tried = new Set<string>();
-
-    while (attempts.length < this.maxAttempts) {
-      throwIfAborted(signal);
-      const now = nowS();
-      if (deadline !== null && now >= deadline) break;
-      const cand = engine.selectCandidate(
-        this.providers, this.strategy, this.rr, req.model, tried, now, engine.rejectedBy(attempts),
-      );
-      if (!cand) {
-        const w = this.waitFor(now, deadline, req.model, tried, attempts);
-        if (w === null) break;
-        this.emit("wait", { latencyMs: w * 1000, attempt: attempts.length });
-        await sleep((w + 0.01) * 1000, signal);
-        tried = engine.forgetRecovered(this.providers, tried, nowS());
-        continue;
-      }
-
-      tried.add(engine.triedKey(cand));
-      if (!cand.key.reserve(now)) continue;
-
-      let produced = false;
-      let firstMs = 0; // time-to-first-token; feeds the latency EWMA
-      let pending: any[] = []; // raw mode: chunks held until one carries output
-      const t0 = nowS();
-      this.emit("attempt", { cand, attempt: attempts.length + 1 });
-      try {
-        for await (const chunk of this.streamRequest(cand, req, signal)) {
-          let out: any[];
-          if (raw) {
-            if (!produced && !hasOutput(chunk)) {
-              pending.push(chunk);
-              continue;
-            }
-            out = [...pending, chunk];
-            pending = [];
-          } else {
-            const t = chunkText(chunk);
-            if (!t) continue;
-            out = [t];
+    const { cand, result, attempts, release } = await this.race(
+      req,
+      deadline,
+      signal,
+      true,
+      (c, s) => this.openStream(c, req, raw, s),
+      (o) => o.gen.return(undefined),
+    );
+    const { gen, items, done, firstMs } = result;
+    try {
+      for (const o of items) yield o;
+      if (!done) {
+        for (;;) {
+          const r = await gen.next();
+          if (r.done) break;
+          if (raw) yield r.value;
+          else {
+            const t = chunkText(r.value);
+            if (t) yield t;
           }
-          if (!produced) {
-            firstMs = (nowS() - t0) * 1000;
-            produced = true;
-          }
-          for (const o of out) yield o;
         }
-      } catch (e) {
-        if (!(e instanceof ProviderError)) throw e; // e.g. the caller aborted
-        this.recordError(cand, e, attempts);
-        if (produced || engine.shouldRaise(e, attempts)) throw e;
-        continue;
       }
-      for (const o of pending) yield o; // a raw stream that never carried output (empty completion)
-      this.recordSuccess(cand, firstMs, attempts);
-      return;
+    } catch (e) {
+      if (e instanceof ProviderError) this.recordError(cand, e, attempts);
+      throw e; // output already reached the caller: no mid-stream failover
+    } finally {
+      await gen.return(undefined);
+      release();
     }
-    throw engine.exhausted(attempts, this.providers, nowS());
+    this.recordSuccess(cand, firstMs, attempts);
+  }
+
+  /** Start a stream and read up to its first emittable item: `items` go out
+   * first (raw mode: the held-back role-only preamble plus the first output
+   * chunk); `done` means it ended without output (an empty completion). */
+  private async openStream(cand: Candidate, req: ChatRequest, raw: boolean, signal: AbortSignal): Promise<Opened> {
+    const t0 = nowS();
+    const gen = this.streamRequest(cand, req, signal);
+    const pending: any[] = [];
+    try {
+      for (;;) {
+        const r = await gen.next();
+        if (r.done) return { gen, items: pending, done: true, firstMs: 0 };
+        const chunk = r.value;
+        if (raw) {
+          if (!hasOutput(chunk)) {
+            pending.push(chunk);
+            continue;
+          }
+          return { gen, items: [...pending, chunk], done: false, firstMs: (nowS() - t0) * 1000 };
+        }
+        const t = chunkText(chunk);
+        if (t) return { gen, items: [t], done: false, firstMs: (nowS() - t0) * 1000 };
+      }
+    } catch (e) {
+      await gen.return(undefined).catch(() => {});
+      throw e;
+    }
   }
 
   /** Read one chunk with an inactivity timeout. The timer runs only while we

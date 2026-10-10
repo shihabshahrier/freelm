@@ -18,6 +18,7 @@ export class KeyState {
   disabled = false;
   disabledSinceWall = 0; // wall-clock ts it was disabled (persistence TTL)
   ewmaLatency = 0;
+  latencyAt = 0; // monotonic ts of the last latency sample
   lastError: string | null = null;
   /** model id -> monotonic ts until which this key must not use that model
    * (its own per-model quota hit, no access to the model, ...). */

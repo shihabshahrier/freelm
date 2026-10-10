@@ -30,6 +30,27 @@ MODEL_THROTTLE_TTL = 60.0
 MODEL_OVERLOAD_TTL = 30.0
 # A request rejected (BadRequest) by this many distinct providers is a caller bug.
 REJECTIONS_TO_RAISE = 2
+# Hedging: an attempt still running after this long gets a parallel one on the
+# next candidate, and the first answer wins. Adaptive: 3x the key's latency
+# average, clamped — (floor, cap, unmeasured) in seconds. Streams race to the
+# first token, so they hedge sooner than whole responses.
+HEDGE_STREAM = (1.5, 6.0, 3.0)
+HEDGE_CHAT = (4.0, 12.0, 6.0)
+
+
+def hedge_delay(cand: Candidate, setting: Union[bool, float, None], stream: bool) -> Optional[float]:
+    """Seconds after which a still-running attempt on ``cand`` gets a parallel
+    hedge, or None. ``setting`` is the client's ``hedge``: True = adaptive, a
+    number = fixed seconds, False/None/0 = off."""
+    if setting is None or setting is False:
+        return None
+    if setting is not True:
+        return float(setting) if setting > 0 else None
+    floor, cap, unmeasured = HEDGE_STREAM if stream else HEDGE_CHAT
+    ewma = cand.key.ewma_latency
+    if ewma <= 0:
+        return unmeasured
+    return min(cap, max(floor, 3.0 * ewma / 1000.0))
 
 
 def select_candidate(
@@ -117,12 +138,22 @@ def provider_status(providers: List[Any], now: float) -> List[str]:
     return out
 
 
-def apply_success(cand: Candidate, latency_ms: float) -> None:
+def apply_success(cand: Candidate, latency_ms: float, now: Optional[float] = None) -> None:
     k = cand.key
     k.breaker.on_success()
     k.last_error = None
     if latency_ms > 0:  # <=0 means "no sample" (e.g. an empty stream) — don't decay the EWMA
         k.ewma_latency = latency_ms if k.ewma_latency == 0 else 0.7 * k.ewma_latency + 0.3 * latency_ms
+        if now is not None:
+            k.latency_at = now
+
+
+def apply_slow(cand: Candidate, elapsed_ms: float, now: float) -> None:
+    """A hedge beat this attempt. Not an error — but the key was at least this
+    slow, so ``smart`` routing puts it behind faster ones for a while."""
+    k = cand.key
+    k.ewma_latency = max(k.ewma_latency, elapsed_ms)
+    k.latency_at = now
 
 
 def _refund(k: Any) -> None:

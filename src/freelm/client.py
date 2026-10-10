@@ -1,10 +1,13 @@
 """The user-facing clients: ``FreeLLM`` (sync) and ``AsyncFreeLLM`` (async)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
+import threading
 import time
+from concurrent import futures
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import httpx
@@ -188,11 +191,51 @@ def _error_frame(p: Provider, err: Any) -> ProviderError:
     return _classify(p, status, None, body)
 
 
-def _attempt_timeout(default: float, deadline: Optional[float]) -> Optional[float]:
+# A host that won't even accept the connection fails within this many seconds
+# (Node's fetch does the same), however long the call's deadline is.
+CONNECT_TIMEOUT = 10.0
+
+
+def _timeout(seconds: Optional[float]) -> httpx.Timeout:
+    if not seconds:
+        return httpx.Timeout(None, connect=CONNECT_TIMEOUT)
+    return httpx.Timeout(seconds, connect=min(CONNECT_TIMEOUT, seconds))
+
+
+def _attempt_timeout(default: float, deadline: Optional[float]) -> httpx.Timeout:
     """One attempt may not outlive the call's overall deadline."""
     if deadline is None:
-        return default or None
-    return max(0.1, deadline - time.monotonic())
+        return _timeout(default)
+    return _timeout(max(0.1, deadline - time.monotonic()))
+
+
+def _spawn(fn: Callable[..., Any], *args: Any) -> "futures.Future[Any]":
+    """Run ``fn`` in a daemon thread and return its Future (an abandoned slow
+    attempt must never hold up interpreter exit, so no thread pool)."""
+    fut: "futures.Future[Any]" = futures.Future()
+
+    def run() -> None:
+        try:
+            fut.set_result(fn(*args))
+        except BaseException as e:  # delivered to whoever waits on the future
+            fut.set_exception(e)
+
+    threading.Thread(target=run, name="freelm-attempt", daemon=True).start()
+    return fut
+
+
+def _release(fut: Any, cleanup: Optional[Callable[[Any], Any]]) -> None:
+    """Done-callback for an abandoned attempt: free what it produced (an open
+    stream) and swallow its outcome."""
+    try:
+        if fut.cancelled() or fut.exception() is not None:
+            return
+        if cleanup is not None:
+            out = cleanup(fut.result())
+            if asyncio.iscoroutine(out):
+                asyncio.ensure_future(out)
+    except Exception:
+        pass
 
 
 def _no_stream_kw(kw: Dict[str, Any]) -> None:
@@ -217,11 +260,12 @@ class _BaseClient:
         self,
         providers: Sequence[Provider],
         *,
-        strategy: str = "priority",
+        strategy: str = "smart",
         max_attempts: int = 12,
         timeout: float = 60.0,
         wait: bool = False,
         max_wait: float = 20.0,
+        hedge: Union[bool, float] = True,
         on_event: Optional[Callable[[Event], Any]] = None,
         persist: Optional[bool] = None,
     ) -> None:
@@ -230,12 +274,16 @@ class _BaseClient:
             raise ConfigError("FreeLLM needs at least one provider")
         if strategy not in STRATEGIES:
             raise ConfigError(f"unknown strategy {strategy!r}; pick one of {STRATEGIES}")
+        if not isinstance(hedge, (bool, int, float)) or hedge < 0:
+            raise ConfigError("hedge must be True (adaptive), a delay in seconds, or False")
         self.providers = providers
         self.strategy = strategy
         self.max_attempts = max_attempts
         self.timeout = timeout
         self.wait = wait
         self.max_wait = max_wait
+        # True = adaptive hedging, a number = fixed delay (s), False/0 = sequential
+        self.hedge: Union[bool, float] = hedge
         self._rr: Dict[str, int] = {"p": 0}
         self._discovery_done = False
         self._on_event = on_event
@@ -300,12 +348,64 @@ class _BaseClient:
         self._save_state()
 
     def _record_success(self, cand: Candidate, latency_ms: float, attempts: List) -> None:
-        engine.apply_success(cand, latency_ms)
+        engine.apply_success(cand, latency_ms, time.monotonic())
         self._emit("success", cand=cand, latency_ms=latency_ms, attempt=len(attempts) + 1)
         self._save_state()
 
     def _exhausted(self, attempts: List) -> Exception:
         return engine.exhausted(attempts, self.providers, time.monotonic())
+
+    # -- the race: one attempt at a time, plus a hedge when it's slow --------
+    def _pick(self, req: Any, tried: set, attempts: List, running: int, now: float) -> Optional[Candidate]:
+        """The next candidate to start (its rpm token reserved), or None."""
+        while len(attempts) + running < self.max_attempts:
+            cand = engine.select_candidate(
+                self.providers, self.strategy, self._rr, req.model, tried, now, engine.rejected_by(attempts)
+            )
+            if cand is None:
+                return None
+            tried.add((cand.provider.name, cand.key.key, cand.model))
+            if cand.key.reserve(now):
+                return cand
+        return None
+
+    def _hedge_at(self, running: Dict[Any, Tuple[Candidate, float]], stream: bool) -> Optional[float]:
+        """When the single running attempt gets a parallel hedge (monotonic), or None."""
+        if len(running) != 1:
+            return None
+        ((cand, t0),) = running.values()
+        d = engine.hedge_delay(cand, self.hedge, stream)
+        return None if d is None else t0 + d
+
+    def _settle(self, cand: Candidate, fut: Any, attempts: List) -> Tuple[bool, Any]:
+        """Outcome of a finished attempt: ``(True, result)``, or ``(False, None)``
+        after recording a failure that should fail over (raises otherwise)."""
+        try:
+            return True, fut.result()
+        except ProviderError as exc:
+            self._record_error(cand, exc, attempts)
+            if engine.should_raise(exc, attempts):
+                raise
+            return False, None
+
+    def _timed_out(self, running: Dict[Any, Tuple[Candidate, float]], attempts: List) -> None:
+        for cand, _t0 in running.values():
+            self._record_error(cand, Transient(cand.provider.name, 0, "timeout: no answer within the call's deadline"),
+                               attempts)
+
+    def _abandon(self, running: Dict[Any, Tuple[Candidate, float]], winner_t0: Optional[float],
+                 cleanup: Optional[Callable[[Any], Any]]) -> None:
+        """Leave attempts that lost the race (or outlived the call). One that
+        started before the winner was slower than it: remember that. Whatever
+        they still produce is released when it lands."""
+        now = time.monotonic()
+        for fut, (cand, t0) in list(running.items()):
+            if winner_t0 is not None and t0 < winner_t0:
+                engine.apply_slow(cand, (now - t0) * 1000.0, now)
+            if isinstance(fut, asyncio.Future):
+                fut.cancel()
+            fut.add_done_callback(lambda f: _release(f, cleanup))
+        running.clear()
 
     # -- introspection ---------------------------------------------------
     def health(self) -> List[Dict[str, Any]]:
@@ -363,7 +463,7 @@ class FreeLLM(_BaseClient):
 
     def __init__(self, providers: Sequence[Provider], *, http_client: Optional[httpx.Client] = None, **kw: Any) -> None:
         super().__init__(providers, **kw)
-        self._client = http_client or httpx.Client(timeout=self.timeout, headers={"User-Agent": _DEFAULT_UA})
+        self._client = http_client or httpx.Client(timeout=_timeout(self.timeout), headers={"User-Agent": _DEFAULT_UA})
         self._owns_client = http_client is None
 
     @classmethod
@@ -377,55 +477,86 @@ class FreeLLM(_BaseClient):
     def _ensure_discovered(self) -> None:
         if self._discovery_done:
             return
-        for p in self.providers:
-            if getattr(p, "discover", False):
-                try:
-                    if discovery.discover_sync(p, self._client):
-                        self._emit("discovery", provider=p.name)
-                except Exception:
-                    pass  # keep hardcoded fallback models
+        # every provider's /models at once: the first call waits for the
+        # slowest catalog, not the sum of them
+        jobs = [(p, _spawn(discovery.discover_sync, p, self._client))
+                for p in self.providers if getattr(p, "discover", False)]
+        futures.wait([f for _, f in jobs])
+        for p, f in jobs:
+            if f.exception() is None and f.result():
+                self._emit("discovery", provider=p.name)
+            # (a failed discovery keeps the hardcoded fallback models)
         self._discovery_done = True
+
+    def _race(self, req: Any, deadline: Optional[float], work: Callable[[Candidate], Any], *, stream: bool,
+              cleanup: Optional[Callable[[Any], Any]] = None) -> Tuple[Candidate, Any, List]:
+        """Run attempts until one succeeds and return ``(cand, result, attempts)``.
+
+        One attempt at a time; when it is still running after the hedge delay
+        (``hedge``), the next candidate starts in parallel and the first answer
+        wins. ``work(cand)`` does the HTTP and returns a result or raises
+        ``ProviderError``; with hedging on it runs in a worker thread, and all
+        bookkeeping stays on this thread."""
+        attempts: List = []
+        tried: set = set()
+        running: Dict[Any, Tuple[Candidate, float]] = {}
+        blocked = False  # a hedge was due but no candidate was ready
+        try:
+            while True:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    break
+                hedge_at = None if blocked else self._hedge_at(running, stream)
+                if not running or (hedge_at is not None and now >= hedge_at):
+                    cand = self._pick(req, tried, attempts, len(running), now)
+                    if cand is not None:
+                        self._emit("hedge" if running else "attempt", cand=cand, attempt=len(attempts) + len(running) + 1)
+                        if not self.hedge:  # sequential: no threads at all
+                            fut: "futures.Future[Any]" = futures.Future()
+                            try:
+                                fut.set_result(work(cand))
+                            except ProviderError as exc:
+                                fut.set_exception(exc)
+                            ok, result = self._settle(cand, fut, attempts)
+                            if ok:
+                                return cand, result, attempts
+                            continue
+                        running[_spawn(work, cand)] = (cand, time.monotonic())
+                        continue
+                    if not running:
+                        w = self._wait_for(now, deadline, req.model, tried, attempts)
+                        if w is None:
+                            break
+                        self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
+                        time.sleep(w + 0.01)
+                        fresh = engine.forget_recovered(self.providers, tried, time.monotonic())
+                        tried.clear()
+                        tried.update(fresh)
+                        continue
+                    blocked, hedge_at = True, None
+                wake = [t for t in (deadline, hedge_at) if t is not None]
+                timeout = max(0.0, min(wake) - now) if wake else None
+                done, _ = futures.wait(list(running), timeout=timeout, return_when=futures.FIRST_COMPLETED)
+                for f in done:
+                    cand, t0 = running.pop(f)
+                    blocked = False
+                    ok, result = self._settle(cand, f, attempts)
+                    if ok:
+                        self._abandon(running, t0, cleanup)
+                        return cand, result, attempts
+            self._timed_out(running, attempts)
+            raise self._exhausted(attempts)
+        finally:
+            self._abandon(running, None, cleanup)
 
     def chat(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> ChatResponse:
         _no_stream_kw(kw)
         self._ensure_discovered()
         req = build_request(messages, model, kw)
         deadline = time.monotonic() + self.timeout if self.timeout else None
-        attempts: List = []
-        tried: set = set()
-
-        while len(attempts) < self.max_attempts:
-            now = time.monotonic()
-            if deadline is not None and now >= deadline:
-                break
-            cand = engine.select_candidate(
-                self.providers, self.strategy, self._rr, req.model, tried, now, engine.rejected_by(attempts)
-            )
-            if cand is None:
-                w = self._wait_for(now, deadline, req.model, tried, attempts)
-                if w is None:
-                    break
-                self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
-                time.sleep(w + 0.01)
-                tried = engine.forget_recovered(self.providers, tried, time.monotonic())
-                continue
-
-            tried.add((cand.provider.name, cand.key.key, cand.model))
-            if not cand.key.reserve(now):
-                continue  # lost an rpm token to a concurrent caller; pick another
-
-            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
-            try:
-                resp = self._do(cand, req, deadline)
-            except ProviderError as exc:
-                self._record_error(cand, exc, attempts)
-                if engine.should_raise(exc, attempts):
-                    raise
-                continue
-            self._record_success(cand, resp.latency_ms, attempts)
-            return resp
-
-        raise self._exhausted(attempts)
+        cand, resp, attempts = self._race(req, deadline, lambda c: self._do(c, req, deadline), stream=False)
+        self._record_success(cand, resp.latency_ms, attempts)
+        return resp
 
     def text(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> str:
         return self.chat(messages, model=model, **kw).text
@@ -447,61 +578,49 @@ class FreeLLM(_BaseClient):
         self._ensure_discovered()
         req = build_request(messages, model, kw)
         deadline = time.monotonic() + self.timeout if self.timeout else None
-        attempts: List = []
-        tried: set = set()
-
-        while len(attempts) < self.max_attempts:
-            now = time.monotonic()
-            if deadline is not None and now >= deadline:
-                break
-            cand = engine.select_candidate(
-                self.providers, self.strategy, self._rr, req.model, tried, now, engine.rejected_by(attempts)
-            )
-            if cand is None:
-                w = self._wait_for(now, deadline, req.model, tried, attempts)
-                if w is None:
-                    break
-                self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
-                time.sleep(w + 0.01)
-                tried = engine.forget_recovered(self.providers, tried, time.monotonic())
-                continue
-
-            tried.add((cand.provider.name, cand.key.key, cand.model))
-            if not cand.key.reserve(now):
-                continue
-
-            produced = False
-            first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
-            pending: List[Dict[str, Any]] = []  # raw mode: chunks held until one carries output
-            t0 = time.monotonic()
-            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
-            try:
-                for chunk in self._stream_do(cand, req):
+        cand, opened, attempts = self._race(
+            req, deadline, lambda c: self._open(c, req, raw), stream=True, cleanup=lambda o: o[0].close()
+        )
+        gen, items, done, first_ms = opened
+        try:
+            yield from items
+            if not done:
+                for chunk in gen:
                     if raw:
-                        if not produced and not _has_output(chunk):
-                            pending.append(chunk)
-                            continue
-                        out: List[Any] = pending + [chunk]
-                        pending = []
+                        yield chunk
                     else:
                         text = _chunk_text(chunk)
-                        if not text:
-                            continue
-                        out = [text]
-                    if not produced:
-                        first_ms = (time.monotonic() - t0) * 1000.0
-                        produced = True
-                    yield from out
-            except ProviderError as exc:
-                self._record_error(cand, exc, attempts)
-                if produced or engine.should_raise(exc, attempts):
-                    raise
-                continue
-            yield from pending  # a raw stream that never carried output (empty completion)
-            self._record_success(cand, first_ms, attempts)
-            return
+                        if text:
+                            yield text
+        except ProviderError as exc:
+            self._record_error(cand, exc, attempts)
+            raise  # output already reached the caller: no mid-stream failover
+        finally:
+            gen.close()
+        self._record_success(cand, first_ms, attempts)
 
-        raise self._exhausted(attempts)
+    def _open(self, cand: Candidate, req: Any, raw: bool) -> Tuple[Any, List[Any], bool, float]:
+        """Start a stream and read up to its first emittable item. Returns
+        ``(gen, items, done, first_ms)``: ``items`` go out first (raw mode: the
+        held-back role-only preamble plus the first output chunk); ``done``
+        means the stream ended without output (an empty completion)."""
+        t0 = time.monotonic()
+        gen = self._stream_do(cand, req)
+        pending: List[Any] = []
+        try:
+            for chunk in gen:
+                if raw:
+                    if not _has_output(chunk):
+                        pending.append(chunk)
+                        continue
+                    return gen, pending + [chunk], False, (time.monotonic() - t0) * 1000.0
+                text = _chunk_text(chunk)
+                if text:
+                    return gen, [text], False, (time.monotonic() - t0) * 1000.0
+        except BaseException:
+            gen.close()
+            raise
+        return gen, pending, True, 0.0
 
     def _stream_do(self, cand: Candidate, req) -> Iterator[Dict[str, Any]]:
         p = cand.provider
@@ -581,12 +700,10 @@ class AsyncFreeLLM(_BaseClient):
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout, headers={"User-Agent": _DEFAULT_UA})
+            self._client = httpx.AsyncClient(timeout=_timeout(self.timeout), headers={"User-Agent": _DEFAULT_UA})
         return self._client
 
     async def _ensure_discovered(self) -> None:
-        import asyncio
-
         if self._discovery_done:
             return
         if self._discovery_lock is None:
@@ -606,48 +723,70 @@ class AsyncFreeLLM(_BaseClient):
             await asyncio.gather(*(one(p) for p in self.providers if getattr(p, "discover", False)))
             self._discovery_done = True
 
-    async def chat(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> ChatResponse:
-        import asyncio
+    async def _race(self, req: Any, deadline: Optional[float], work: Callable[[Candidate], Any], *, stream: bool,
+                    cleanup: Optional[Callable[[Any], Any]] = None) -> Tuple[Candidate, Any, List]:
+        """Async twin of :meth:`FreeLLM._race`: attempts are tasks, and a
+        hedge that loses is cancelled outright."""
+        attempts: List = []
+        tried: set = set()
+        running: Dict[Any, Tuple[Candidate, float]] = {}
+        blocked = False
+        try:
+            while True:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    break
+                hedge_at = None if blocked else self._hedge_at(running, stream)
+                if not running or (hedge_at is not None and now >= hedge_at):
+                    cand = self._pick(req, tried, attempts, len(running), now)
+                    if cand is not None:
+                        self._emit("hedge" if running else "attempt", cand=cand, attempt=len(attempts) + len(running) + 1)
+                        if not self.hedge:  # sequential
+                            fut: "asyncio.Future[Any]" = asyncio.get_running_loop().create_future()
+                            try:
+                                fut.set_result(await work(cand))
+                            except ProviderError as exc:
+                                fut.set_exception(exc)
+                            ok, result = self._settle(cand, fut, attempts)
+                            if ok:
+                                return cand, result, attempts
+                            continue
+                        running[asyncio.ensure_future(work(cand))] = (cand, time.monotonic())
+                        continue
+                    if not running:
+                        w = self._wait_for(now, deadline, req.model, tried, attempts)
+                        if w is None:
+                            break
+                        self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
+                        await asyncio.sleep(w + 0.01)
+                        fresh = engine.forget_recovered(self.providers, tried, time.monotonic())
+                        tried.clear()
+                        tried.update(fresh)
+                        continue
+                    blocked, hedge_at = True, None
+                wake = [t for t in (deadline, hedge_at) if t is not None]
+                timeout = max(0.0, min(wake) - now) if wake else None
+                done, _ = await asyncio.wait(list(running), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                for f in done:
+                    cand, t0 = running.pop(f)
+                    blocked = False
+                    ok, result = self._settle(cand, f, attempts)
+                    if ok:
+                        self._abandon(running, t0, cleanup)
+                        return cand, result, attempts
+            self._timed_out(running, attempts)
+            raise self._exhausted(attempts)
+        finally:
+            self._abandon(running, None, cleanup)
 
+    async def chat(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> ChatResponse:
         _no_stream_kw(kw)
         await self._ensure_discovered()
         req = build_request(messages, model, kw)
         deadline = time.monotonic() + self.timeout if self.timeout else None
-        attempts: List = []
-        tried: set = set()
-
-        while len(attempts) < self.max_attempts:
-            now = time.monotonic()
-            if deadline is not None and now >= deadline:
-                break
-            cand = engine.select_candidate(
-                self.providers, self.strategy, self._rr, req.model, tried, now, engine.rejected_by(attempts)
-            )
-            if cand is None:
-                w = self._wait_for(now, deadline, req.model, tried, attempts)
-                if w is None:
-                    break
-                self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
-                await asyncio.sleep(w + 0.01)
-                tried = engine.forget_recovered(self.providers, tried, time.monotonic())
-                continue
-
-            tried.add((cand.provider.name, cand.key.key, cand.model))
-            if not cand.key.reserve(now):
-                continue
-
-            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
-            try:
-                resp = await self._ado(cand, req, deadline)
-            except ProviderError as exc:
-                self._record_error(cand, exc, attempts)
-                if engine.should_raise(exc, attempts):
-                    raise
-                continue
-            self._record_success(cand, resp.latency_ms, attempts)
-            return resp
-
-        raise self._exhausted(attempts)
+        cand, resp, attempts = await self._race(req, deadline, lambda c: self._ado(c, req, deadline), stream=False)
+        self._record_success(cand, resp.latency_ms, attempts)
+        return resp
 
     async def text(self, messages: Any, model: ModelArg = "auto", **kw: Any) -> str:
         return (await self.chat(messages, model=model, **kw)).text
@@ -661,68 +800,50 @@ class AsyncFreeLLM(_BaseClient):
         return self._astream(messages, model, kw, raw=True)
 
     async def _astream(self, messages: Any, model: ModelArg, kw: Dict[str, Any], *, raw: bool) -> AsyncIterator[Any]:
-        import asyncio
-
         await self._ensure_discovered()
         req = build_request(messages, model, kw)
         deadline = time.monotonic() + self.timeout if self.timeout else None
-        attempts: List = []
-        tried: set = set()
-
-        while len(attempts) < self.max_attempts:
-            now = time.monotonic()
-            if deadline is not None and now >= deadline:
-                break
-            cand = engine.select_candidate(
-                self.providers, self.strategy, self._rr, req.model, tried, now, engine.rejected_by(attempts)
-            )
-            if cand is None:
-                w = self._wait_for(now, deadline, req.model, tried, attempts)
-                if w is None:
-                    break
-                self._emit("wait", latency_ms=w * 1000.0, attempt=len(attempts))
-                await asyncio.sleep(w + 0.01)
-                tried = engine.forget_recovered(self.providers, tried, time.monotonic())
-                continue
-
-            tried.add((cand.provider.name, cand.key.key, cand.model))
-            if not cand.key.reserve(now):
-                continue
-
-            produced = False
-            first_ms = 0.0  # time-to-first-token; feeds the latency EWMA
-            pending: List[Dict[str, Any]] = []
-            t0 = time.monotonic()
-            self._emit("attempt", cand=cand, attempt=len(attempts) + 1)
-            try:
-                async for chunk in self._astream_do(cand, req):
+        cand, opened, attempts = await self._race(
+            req, deadline, lambda c: self._aopen(c, req, raw), stream=True, cleanup=lambda o: o[0].aclose()
+        )
+        gen, items, done, first_ms = opened
+        try:
+            for o in items:
+                yield o
+            if not done:
+                async for chunk in gen:
                     if raw:
-                        if not produced and not _has_output(chunk):
-                            pending.append(chunk)
-                            continue
-                        out: List[Any] = pending + [chunk]
-                        pending = []
+                        yield chunk
                     else:
                         text = _chunk_text(chunk)
-                        if not text:
-                            continue
-                        out = [text]
-                    if not produced:
-                        first_ms = (time.monotonic() - t0) * 1000.0
-                        produced = True
-                    for o in out:
-                        yield o
-            except ProviderError as exc:
-                self._record_error(cand, exc, attempts)
-                if produced or engine.should_raise(exc, attempts):
-                    raise
-                continue
-            for o in pending:
-                yield o
-            self._record_success(cand, first_ms, attempts)
-            return
+                        if text:
+                            yield text
+        except ProviderError as exc:
+            self._record_error(cand, exc, attempts)
+            raise  # output already reached the caller: no mid-stream failover
+        finally:
+            await gen.aclose()
+        self._record_success(cand, first_ms, attempts)
 
-        raise self._exhausted(attempts)
+    async def _aopen(self, cand: Candidate, req: Any, raw: bool) -> Tuple[Any, List[Any], bool, float]:
+        """Async twin of :meth:`FreeLLM._open`."""
+        t0 = time.monotonic()
+        gen = self._astream_do(cand, req)
+        pending: List[Any] = []
+        try:
+            async for chunk in gen:
+                if raw:
+                    if not _has_output(chunk):
+                        pending.append(chunk)
+                        continue
+                    return gen, pending + [chunk], False, (time.monotonic() - t0) * 1000.0
+                text = _chunk_text(chunk)
+                if text:
+                    return gen, [text], False, (time.monotonic() - t0) * 1000.0
+        except BaseException:
+            await gen.aclose()
+            raise
+        return gen, pending, True, 0.0
 
     async def _astream_do(self, cand: Candidate, req) -> AsyncIterator[Dict[str, Any]]:
         p = cand.provider

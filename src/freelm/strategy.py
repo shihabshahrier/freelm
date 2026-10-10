@@ -12,11 +12,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from .errors import ConfigError
 from .registry import is_virtual
 
+SMART = "smart"
 PRIORITY = "priority"
 ROUND_ROBIN = "round_robin"
 QUOTA_AWARE = "quota_aware"
 LATENCY = "latency"
-STRATEGIES = (PRIORITY, ROUND_ROBIN, QUOTA_AWARE, LATENCY)
+STRATEGIES = (SMART, PRIORITY, ROUND_ROBIN, QUOTA_AWARE, LATENCY)
 
 
 @dataclass
@@ -82,6 +83,10 @@ def order_candidates(
         provs.sort(key=lambda p: (-p.capacity(now), p.priority))
     elif strategy == LATENCY:
         provs.sort(key=lambda p: (p.avg_latency(), p.priority))
+    elif strategy == SMART:
+        # priority tiers first; within a tier the fastest measured provider —
+        # an unknown one counts as typical, so it gets tried and measured
+        provs.sort(key=lambda p: (p.priority, p.expected_latency(now)))
     else:  # PRIORITY
         provs.sort(key=lambda p: p.priority)
 
