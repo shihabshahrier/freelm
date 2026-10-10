@@ -27,8 +27,16 @@ export class OpenRouter extends Provider {
 
   constructor(keys: string | string[], opts: ProviderOptions = {}) {
     // App attribution: OpenRouter lists apps that send a referer + title on
-    // openrouter.ai/apps and in each model's "Apps" tab. Override via extraHeaders.
-    const extraHeaders = { "HTTP-Referer": "https://github.com/shihabshahrier/freelm", "X-Title": "freelm", ...(opts.extraHeaders ?? {}) };
+    // openrouter.ai/apps and in each model's "Apps" tab (X-Title is the legacy
+    // name of X-OpenRouter-Title; categories: at most 2 per request, from
+    // openrouter.ai/docs/app-attribution). Override via extraHeaders.
+    const extraHeaders = {
+      "HTTP-Referer": "https://github.com/shihabshahrier/freelm",
+      "X-OpenRouter-Title": "freelm",
+      "X-Title": "freelm",
+      "X-OpenRouter-Categories": "programming-app,general-chat",
+      ...(opts.extraHeaders ?? {}),
+    };
     // OpenRouter's catalog mixes paid and free models -> guard paid ids by default.
     super(keys, { discover: !opts.models, discoverFreeOnly: true, freeOnly: true, ...opts, extraHeaders });
   }

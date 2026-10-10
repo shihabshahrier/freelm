@@ -254,3 +254,15 @@ def test_zai_429_benches_only_that_model():
     assert [json.loads(c.request.content)["model"] for c in route.calls] == [
         "glm-4.7-flash", "glm-4.5-flash", "glm-4.5-flash"]
     assert p.keys[0].cooldown_until == 0.0  # the key itself stays hot
+
+
+def test_openrouter_sends_app_attribution_headers():
+    from freelm import OpenRouter
+
+    h = OpenRouter("k", discover=False).headers("k")
+    assert h["HTTP-Referer"] == "https://github.com/shihabshahrier/freelm"
+    assert h["X-OpenRouter-Title"] == "freelm" and h["X-Title"] == "freelm"  # current + legacy name
+    assert h["X-OpenRouter-Categories"] == "programming-app,general-chat"  # at most 2 per request
+    custom = OpenRouter("k", discover=False, extra_headers={"X-OpenRouter-Title": "my-app"}).headers("k")
+    assert custom["X-OpenRouter-Title"] == "my-app"  # callers can attribute their own app
+

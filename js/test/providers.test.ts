@@ -237,3 +237,15 @@ it("Z.ai 429 benches only that model", async () => {
   expect(calls[0].url).toBe(ZAI_CHAT);
   expect(p.keys[0].cooldownUntil).toBe(0); // the key itself stays hot
 });
+
+it("OpenRouter sends app attribution headers", async () => {
+  const { OpenRouter } = await import("../src/index.js");
+  const h = new OpenRouter("k", { discover: false }).headers("k");
+  expect(h["HTTP-Referer"]).toBe("https://github.com/shihabshahrier/freelm");
+  expect(h["X-OpenRouter-Title"]).toBe("freelm");
+  expect(h["X-Title"]).toBe("freelm"); // legacy name, still honoured
+  expect(h["X-OpenRouter-Categories"]).toBe("programming-app,general-chat"); // at most 2 per request
+  const custom = new OpenRouter("k", { discover: false, extraHeaders: { "X-OpenRouter-Title": "my-app" } }).headers("k");
+  expect(custom["X-OpenRouter-Title"]).toBe("my-app"); // callers can attribute their own app
+});
+

@@ -6,10 +6,12 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/shihabshahrier/freelm/blob/main/LICENSE)
 
 **freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral,
-NVIDIA NIM and Kilo into one OpenAI-compatible LLM — in your Python or TypeScript code, or as a local `/v1` endpoint for any tool.** It rotates
-your keys, fails over across providers on rate limits, outages and retired models, and discovers which models are
-free today. Your own free keys, called directly: nothing to host, no relay in the middle — and the CLI even works
-with **no keys at all**.
+NVIDIA NIM and Kilo into one OpenAI-compatible LLM — in your Python or TypeScript code, or as a local `/v1` endpoint for any tool.**
+A free-only, lightweight alternative to LiteLLM or an OpenRouter account: it rotates your keys, falls back across
+providers on rate limits, outages and retired models, races a slow provider against the next one (a hung provider
+costs ~6 s, not a 60 s failure — [measured](https://github.com/shihabshahrier/freelm/tree/main/benchmarks)), and
+discovers which models are free today. Your own free keys, called directly: nothing to host, no relay in the
+middle — and the CLI even works with **no keys at all**.
 
 ```bash
 pip install freelm          # Python >= 3.9   ·   npm install freelm  (Node >= 20, zero dependencies)
@@ -279,6 +281,25 @@ parallel and the first answer wins (measured: a hung provider ahead of a healthy
 stream in ~3 s). After that, smart routing sends calls to the fast provider first, so later calls don't wait at all.
 The numbers come from a reproducible simulation: [`benchmarks/`](https://github.com/shihabshahrier/freelm/tree/main/benchmarks).
 A host that won't accept a connection fails within 10 s.
+
+### Is there a lightweight LiteLLM alternative?
+For free tiers, yes: freelm is one dependency in Python (`httpx`) and zero in Node, with no proxy to run. LiteLLM is
+the better tool for paid production traffic across 100+ providers, budgets and teams; freelm is narrower — free-only,
+with per-key quota and model state, free-model discovery and failover tuned to how free tiers break.
+
+### Is there a free OpenRouter alternative?
+Use the free tiers at the source: Google AI Studio, Groq, Cloudflare Workers AI, Mistral, NVIDIA NIM, Z.ai and Cohere
+all serve real models at no cost. freelm calls them directly with your own keys and keeps OpenRouter as one more pool,
+so when OpenRouter's free models are throttled the call moves on instead of failing.
+
+### How do I add LLM fallback or failover in Python or Node.js?
+`FreeLLM.from_env()` (or `FreeLLM.fromEnv()`) already falls back across every provider you have a key for: errors move
+on in one round trip, slow providers are raced, and `model=["vendor/id", "chat:fast"]` gives an explicit per-call
+fallback chain. No `try/except` needed.
+
+### How do I rotate API keys across free LLM tiers?
+Comma-separate several keys per provider (`GROQ_API_KEY=key1,key2`) or pass a list: freelm paces each key, rotates on
+429, cools or disables keys individually and, with `persist=True`, remembers quota state across restarts.
 
 ### How do I avoid free-tier rate limits (429)?
 Add more providers and keys: freelm paces each key, rotates on 429, benches per-model quotas (Gemini, Groq) and
