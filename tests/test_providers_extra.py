@@ -266,3 +266,21 @@ def test_openrouter_sends_app_attribution_headers():
     custom = OpenRouter("k", discover=False, extra_headers={"X-OpenRouter-Title": "my-app"}).headers("k")
     assert custom["X-OpenRouter-Title"] == "my-app"  # callers can attribute their own app
 
+
+def test_gemini_daily_quota_rests_the_model_despite_a_short_retry_delay():
+    from freelm.errors import DAILY_QUOTA_RETRY, AuthError, RateLimited, classify
+
+    daily = json.dumps({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota.",
+        "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+            {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "29s"}]}})
+    e = classify(429, None, daily, "google")
+    assert isinstance(e, RateLimited) and e.retry_after == DAILY_QUOTA_RETRY  # not 29 s
+    per_minute = daily.replace("PerDayPerProjectPerModel", "PerMinutePerProjectPerModel")
+    assert classify(429, None, per_minute, "google").retry_after == 29.0  # minute quotas keep Google's hint
+    tokens_per_day = daily.replace("GenerateRequestsPerDayPerProjectPerModel", "GenerateContentInputTokensPerModelPerDay")
+    assert classify(429, None, tokens_per_day, "google").retry_after == DAILY_QUOTA_RETRY
+    # Gemini's newer auth keys fail with new wording: still a dead key
+    assert isinstance(classify(400, None, '{"error": {"code": 400, "message": "Invalid Auth key."}}', "google"), AuthError)
+    assert isinstance(classify(401, None, '{"error":{"status":"UNAUTHENTICATED","details":[{"reason":"ACCESS_TOKEN_TYPE_UNSUPPORTED"}]}}', "google"), AuthError)
+

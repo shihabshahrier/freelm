@@ -40,7 +40,7 @@ anonymous tier) and says so. Their limits are low and free routes may log prompt
    ```text
    $ freelm doctor
      openrouter  sk-or-...a1b2    FAIL  key rejected (401): User not found. — get a new free key: https://openrouter.ai/keys
-     google      AIzaSy...x9yz    OK    gemini-2.5-flash-lite · 1131 ms
+     google      AIzaSy...x9yz    OK    gemini-3.5-flash-lite · 1131 ms
      groq        gsk_ab...cd12    FAIL  key rejected (401): Invalid API Key — get a new free key: https://console.groq.com/keys
    1 of 3 key(s) working — ready: google
    ```
@@ -307,6 +307,18 @@ fallback chain. No `try/except` needed.
 ### How do I rotate API keys across free LLM tiers?
 Comma-separate several keys per provider (`GROQ_API_KEY=key1,key2`) or pass a list: freelm paces each key, rotates on
 429, cools or disables keys individually and, with `persist=True`, remembers quota state across restarts.
+
+### What does this free-tier error mean?
+Each common one has a guide with the exact error body, the causes, the fix on the provider itself and what freelm does
+about it: [Gemini 429 RESOURCE_EXHAUSTED](https://shahriarlabs.com/products/freelm/errors/gemini-429-resource-exhausted/),
+[Gemini "User location is not supported"](https://shahriarlabs.com/products/freelm/errors/gemini-user-location-not-supported/),
+[Gemini "API key not valid"](https://shahriarlabs.com/products/freelm/errors/gemini-api-key-not-valid/),
+[Gemini 503 overloaded](https://shahriarlabs.com/products/freelm/errors/gemini-503-model-overloaded/),
+[OpenRouter free-models-per-day](https://shahriarlabs.com/products/freelm/errors/openrouter-rate-limit-free-models-per-day/),
+[OpenRouter "No endpoints found that support tool use"](https://shahriarlabs.com/products/freelm/errors/openrouter-no-endpoints-tool-use/),
+[Groq rate limits](https://shahriarlabs.com/products/freelm/errors/groq-rate-limit-reached/), [Mistral 429](https://shahriarlabs.com/products/freelm/errors/mistral-requests-rate-limit-exceeded/),
+[Z.ai 1302](https://shahriarlabs.com/products/freelm/errors/zai-rate-limit-1302/) and [empty replies from thinking models](https://shahriarlabs.com/products/freelm/errors/empty-response-thinking-models/)
+— all in the [error reference](https://shahriarlabs.com/products/freelm/errors/).
 
 ### How do I avoid free-tier rate limits (429)?
 Add more providers and keys: freelm paces each key, rotates on 429, benches per-model quotas (Gemini, Groq) and

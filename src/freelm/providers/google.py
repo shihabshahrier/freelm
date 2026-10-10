@@ -19,22 +19,27 @@ class GoogleAIStudio(Provider):
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 
     TIERS: Dict[str, Dict[str, Any]] = {
-        "free": {"rpm": 15, "rpd": 1500},
+        # Free quotas are per project *per model* (about 20 requests/day each on
+        # the 3.x models, checked 2026-10), so there is no useful key-wide daily
+        # cap: a model's 429 benches just that model (rate_limit_scope below).
+        "free": {"rpm": 15, "rpd": None},
         "tier1": {"rpm": 2000, "rpd": None},
     }
 
-    # Verified live on the free tier 2026-10-09. gemini-2.0-flash and
-    # gemini-2.5-pro are retired (404); Pro/preview "omni"/deep-research models
-    # have no free quota (429, limit 0), so they're left out. Thinking models
-    # (2.5-flash, 3.x-flash) can spend a small max_tokens budget entirely on
-    # reasoning (empty text, finish_reason=length) — the non-thinking lite
-    # models lead for `auto`, and the thinkers are tagged "reasoning".
+    # Verified live on the free tier 2026-10-10. Gemini 2.0 is shut down and
+    # 2.5 answers new accounts with 404 "no longer available to new users", so
+    # the list is 3.x plus the -latest aliases. Pro/preview models have no free
+    # quota (429, limit 0) and are left out. Thinking models (3.x flash) can
+    # spend a small max_tokens budget entirely on reasoning (empty text,
+    # finish_reason=length): the lite models lead for `auto`, and the thinkers
+    # are tagged "reasoning".
     DEFAULT_MODELS = [
-        ModelSpec("gemini-2.5-flash-lite", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
+        ModelSpec("gemini-3.5-flash-lite", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
         ModelSpec("gemini-3.1-flash-lite", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
-        ModelSpec("gemini-2.5-flash", ("chat", "fast", "large", "tools", "vision", "reasoning"), ctx=1048576),
-        ModelSpec("gemini-3-flash-preview", ("chat", "large", "tools", "vision", "reasoning"), ctx=1048576),
         ModelSpec("gemini-flash-lite-latest", ("chat", "fast", "small", "tools", "vision"), ctx=1048576),
+        ModelSpec("gemini-3.5-flash", ("chat", "large", "tools", "vision", "reasoning"), ctx=1048576),
+        ModelSpec("gemini-3.7-flash", ("chat", "large", "tools", "vision", "reasoning"), ctx=1048576),
+        ModelSpec("gemini-flash-latest", ("chat", "large", "tools", "vision", "reasoning"), ctx=1048576),
     ]
 
     def rate_limit_scope(self, body: str) -> str:

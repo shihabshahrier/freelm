@@ -249,3 +249,20 @@ it("OpenRouter sends app attribution headers", async () => {
   expect(custom["X-OpenRouter-Title"]).toBe("my-app"); // callers can attribute their own app
 });
 
+it("Gemini daily quota rests the model despite a short retryDelay", async () => {
+  const { classify, DAILY_QUOTA_RETRY, RateLimited, AuthError } = await import("../src/errors.js");
+  const daily = JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "You exceeded your current quota.",
+    details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] },
+      { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "29s" }] } });
+  const e = classify(429, null, daily, "google");
+  expect(e).toBeInstanceOf(RateLimited);
+  expect(e.retryAfter).toBe(DAILY_QUOTA_RETRY); // not 29 s
+  const perMinute = daily.replace("PerDayPerProjectPerModel", "PerMinutePerProjectPerModel");
+  expect(classify(429, null, perMinute, "google").retryAfter).toBe(29); // minute quotas keep Google's hint
+  const tokensPerDay = daily.replace("GenerateRequestsPerDayPerProjectPerModel", "GenerateContentInputTokensPerModelPerDay");
+  expect(classify(429, null, tokensPerDay, "google").retryAfter).toBe(DAILY_QUOTA_RETRY);
+  // Gemini's newer auth keys fail with new wording: still a dead key
+  expect(classify(400, null, '{"error": {"code": 400, "message": "Invalid Auth key."}}', "google")).toBeInstanceOf(AuthError);
+  expect(classify(401, null, '{"error":{"status":"UNAUTHENTICATED","details":[{"reason":"ACCESS_TOKEN_TYPE_UNSUPPORTED"}]}}', "google")).toBeInstanceOf(AuthError);
+});
+
