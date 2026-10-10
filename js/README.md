@@ -141,7 +141,29 @@ npx freelm models --provider groq
 npx freelm health
 ```
 
-Full docs, comparison with other free-LLM gateways and FAQ: the
+## FAQ
+
+**What is the best free LLM API for Node.js?** Google AI Studio (Gemini) has the most generous free tier, Groq is
+the fastest, OpenRouter has the most `:free` models — and each has outages and limits. freelm uses them together
+behind one OpenAI-compatible call, so you get whichever is up and fast right now.
+
+**How fast is failover?** An error (429, 5xx, bad key, retired model) moves to the next provider immediately — one
+extra round trip. A provider that hangs or answers slowly is raced: after a few seconds the next one starts in
+parallel and the first answer wins (a hung provider costs ~6 s once, a stalled stream ~3 s); smart routing then
+sends later calls to the fast provider first.
+
+**Can I use it without an API key?** Yes, for trying it out: `npx freelm chat "hello"` falls back to keyless public
+endpoints (Kilo Gateway, OVHcloud) and says so. One free Gemini or Groq key is far more capable.
+
+**When can freelm cost money?** It is free-only by default: OpenRouter, Kilo and Z.ai paid models are blocked unless
+you pass `freeOnly: false`. Your own account's plan decides the rest (Gemini with billing enabled, Cohere production
+keys, Cloudflare's Workers Paid plan past the daily free Neurons).
+
+**freelm vs LiteLLM or OpenRouter?** LiteLLM covers 100+ paid and free providers; freelm is free-only, zero-dependency
+and focused on surviving free-tier limits (per-key quotas, model benching, live free-model discovery). OpenRouter is
+one aggregator — freelm uses it as one pool and fails over to Gemini, Groq, Cloudflare and others directly.
+
+Full docs and a comparison with other free-LLM gateways: the
 [main README](https://github.com/shihabshahrier/freelm#readme) ·
 [Changelog](https://github.com/shihabshahrier/freelm/blob/main/CHANGELOG.md).
 

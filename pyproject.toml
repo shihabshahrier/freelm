@@ -1,14 +1,15 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "freelm"
 dynamic = ["version"]
-description = "Free LLM API for Python: one OpenAI-compatible client and local endpoint (freelm serve) over the free tiers of Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral, NVIDIA NIM and Kilo, with automatic failover. CLI works with no keys."
+description = "Free LLM API for Python: one OpenAI-compatible client and local endpoint over Gemini, Groq, OpenRouter, Cloudflare and more free tiers, with fast failover."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Shihab Shahriar Antor", email = "shahriarlabs@gmail.com" }]
 keywords = [
     "llm", "free-llm", "free-llm-api", "free-ai-api", "llm-api", "llm-gateway", "llm-router",
@@ -20,15 +21,18 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
@@ -39,7 +43,7 @@ dependencies = ["httpx>=0.24"]
 dev = ["pytest>=7", "respx>=0.20", "anyio>=4", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://shihub.site/freelm"
+Homepage = "https://shahriarlabs.com/products/freelm/"
 Documentation = "https://shihub.site/freelm/docs"
 Repository = "https://github.com/shihabshahrier/freelm"
 Changelog = "https://github.com/shihabshahrier/freelm/blob/main/CHANGELOG.md"
