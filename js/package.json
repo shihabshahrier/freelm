@@ -1,6 +1,6 @@
 {
   "name": "freelm",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Free LLM API for Node.js & TypeScript: OpenAI-compatible client and local endpoint over Gemini, Groq, OpenRouter, Cloudflare and more free tiers. Fast failover, zero deps.",
   "keywords": [
     "llm",

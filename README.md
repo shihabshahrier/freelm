@@ -62,6 +62,9 @@ Then point your tool at `http://127.0.0.1:4000/v1` with any API key and model `a
 | **Vercel AI SDK** | `createOpenAICompatible({ name: "freelm", baseURL: "http://127.0.0.1:4000/v1" })("auto")` |
 | **Continue** (VS Code / JetBrains) | model with `provider: openai`, `apiBase: http://127.0.0.1:4000/v1`, `model: auto` |
 | **Cline / Roo Code** | API provider "OpenAI Compatible", base URL `http://127.0.0.1:4000/v1`, model `auto` |
+| **OpenCode** | `opencode.json` → `"provider": {"freelm": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": "http://127.0.0.1:4000/v1"}, "models": {"auto": {}}}}` ([docs](https://opencode.ai/docs/providers/)) |
+| **OpenClaw** | `models.providers.freelm`: `baseUrl: "http://127.0.0.1:4000/v1"`, `api: "openai-completions"`, `models: [{ id: "auto" }]`, then allow `freelm/auto` in `agents.defaults.models` ([docs](https://docs.openclaw.ai/gateway/config-tools/custom-providers)) |
+| **Hermes Agent** | `hermes model` → Custom endpoint → base URL `http://127.0.0.1:4000/v1`, model `auto` (needs a long-context model: pin one with `large` or a concrete id) |
 | **Aider** | `aider --openai-api-base http://127.0.0.1:4000/v1 --openai-api-key freelm --model openai/auto` |
 | **Open WebUI** | Admin → Connections → OpenAI API: `http://host.docker.internal:4000/v1` |
 | **n8n** | OpenAI credential → Base URL `http://127.0.0.1:4000/v1` |
@@ -250,7 +253,7 @@ Yes. `freelm.compat.OpenAI` is a drop-in for the OpenAI SDK, and `freelm serve` 
 Cohere, Mistral, NVIDIA NIM)
 with streaming, tool calling and automatic failover.
 
-### How do I use free LLMs in Cursor, Cline, Continue, Open WebUI or n8n?
+### How do I use free LLMs in OpenCode, OpenClaw, Hermes, Cline, Continue, Open WebUI or n8n?
 Run `freelm serve` and set the tool's OpenAI base URL to `http://127.0.0.1:4000/v1` with model `auto` — see the
 [table above](#use-free-llms-in-any-openai-compatible-tool). Tools that call the endpoint from their own servers need
 a public URL (for example a tunnel) plus `--api-key`.
@@ -274,6 +277,7 @@ An error (429, 5xx, bad key, retired model) fails over immediately — the cost 
 under a second. A provider that hangs or answers slowly is raced: after a few seconds the next provider starts in
 parallel and the first answer wins (measured: a hung provider ahead of a healthy one answers in ~6 s, a stalled
 stream in ~3 s). After that, smart routing sends calls to the fast provider first, so later calls don't wait at all.
+The numbers come from a reproducible simulation: [`benchmarks/`](https://github.com/shihabshahrier/freelm/tree/main/benchmarks).
 A host that won't accept a connection fails within 10 s.
 
 ### How do I avoid free-tier rate limits (429)?
