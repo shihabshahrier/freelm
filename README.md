@@ -10,8 +10,9 @@ NVIDIA NIM and Kilo into one OpenAI-compatible LLM — in your Python or TypeScr
 A free-only, lightweight alternative to LiteLLM or an OpenRouter account: it rotates your keys, falls back across
 providers on rate limits, outages and retired models, races a slow provider against the next one (a hung provider
 costs ~6 s, not a 60 s failure — [measured](https://github.com/shihabshahrier/freelm/tree/main/benchmarks)), and
-discovers which models are free today. Your own free keys, called directly: nothing to host, no relay in the
-middle — and the CLI even works with **no keys at all**.
+discovers which models are free today. A library, not a server to babysit: your own free keys go straight to each
+provider — no relay, dashboard or admin port, one runtime dependency in Python and none in Node — and the CLI even
+works with **no keys at all**.
 
 ```bash
 pip install freelm          # Python >= 3.9   ·   npm install freelm  (Node >= 20, zero dependencies)
@@ -235,11 +236,17 @@ the Free plan just stops).
 
 ## How freelm compares
 
-| Project | What it is | Difference |
-|---------|------------|------------|
-| [freellmapi](https://github.com/tashfeenahmed/freellmapi), [freellmpool](https://github.com/0xzr/freellmpool) | Self-hosted gateways pooling many free providers | freelm is a library first (`pip`/`npm install`, nothing to host) with the gateway optional (`freelm serve`), in both Python and TypeScript |
-| [LiteLLM](https://github.com/BerriAI/litellm) | SDK + proxy for 100+ providers, paid and free | freelm is free-only, zero-dependency, with per-key quota/breaker state and free-model discovery built in |
-| [OpenRouter](https://openrouter.ai) | One aggregator | One of freelm's pools — when its free quota runs out, freelm fails over to Gemini, Groq, Cloudflare, Z.ai, Mistral or NIM directly |
+Most free-LLM tools of 2026 are **servers you run** — many with a dashboard, most aimed at coding agents. freelm is
+the **library** for your own code, with the server optional:
+
+| Project | What it is | How freelm differs |
+|---------|------------|--------------------|
+| [OmniRoute](https://github.com/diegosouzapw/OmniRoute), [9Router](https://github.com/decolua/9router), [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi), [free-claude-code](https://github.com/Alishahryar1/free-claude-code) | Self-hosted gateways (dashboards, desktop apps) that pool free providers, mostly for coding agents | `pip`/`npm install` and call it from your code; nothing to host, no admin port or database to secure. `freelm serve` gives a local `/v1` endpoint when you want one |
+| [freellmpool](https://github.com/0xzr/freellmpool) | Python library + proxy over free providers | freelm also ships a zero-dependency TypeScript package with the same behaviour (Node, Workers, browsers) |
+| [LiteLLM](https://github.com/BerriAI/litellm) | SDK + proxy for 100+ providers, paid and free | Better for paid production traffic. freelm is free-only, one dependency, with per-key quota state, free-model discovery and failover tuned to how free tiers break |
+| [any-llm](https://github.com/mozilla-ai/any-llm), [aisuite](https://github.com/andrewyng/aisuite), [llm](https://github.com/simonw/llm) | Unified interfaces across providers | They unify the API; freelm also pools keys, tracks free quotas and fails over when a free tier gives out |
+| [OpenRouter](https://openrouter.ai) | One hosted aggregator | One of freelm's pools — when its free models are throttled, freelm moves to Gemini, Groq, Cloudflare, Z.ai, Mistral or NIM directly |
+| [gpt4free](https://github.com/xtekky/gpt4free) | Reverse-engineered chat endpoints | freelm only uses providers' official free tiers with your own keys |
 | LangChain / LlamaIndex | Orchestration frameworks | Use freelm under them via `freelm serve` or the OpenAI-compatible shim |
 
 ## FAQ
