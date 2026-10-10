@@ -6,8 +6,11 @@
 
 **freelm turns the free tiers of Google Gemini, Groq, OpenRouter, Cloudflare Workers AI, Z.ai, Cohere, Mistral and
 NVIDIA NIM into one OpenAI-compatible LLM — in your TypeScript code, or as a local `/v1` endpoint for any tool (`npx freelm serve`).**
-It rotates your keys, fails over across providers on rate limits, outages and retired models, and discovers which
-models are free today. Zero dependencies, ESM + CommonJS, your own keys called directly.
+A free-only, lightweight alternative to LiteLLM or an OpenRouter account: it rotates your keys, falls back across
+providers on rate limits, outages and retired models, races a slow provider against the next one (a hung provider
+costs ~6 s, not a 60 s failure), and discovers which models are free today. A library, not a server to babysit: zero
+dependencies, ESM + CommonJS, runs in Node, Workers and browsers, and your own keys go straight to each provider (no
+relay, dashboard or admin port).
 
 > Also on PyPI with the same engine: [`pip install freelm`](https://pypi.org/project/freelm/).
 

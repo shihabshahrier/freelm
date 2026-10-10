@@ -37,8 +37,15 @@ class OpenRouter(Provider):
 
     def __init__(self, keys, **kw):
         # App attribution: OpenRouter lists apps that send a referer + title on
-        # openrouter.ai/apps and in each model's "Apps" tab. Override via extra_headers.
-        extra = {"HTTP-Referer": "https://github.com/shihabshahrier/freelm", "X-Title": "freelm"}
+        # openrouter.ai/apps and in each model's "Apps" tab (X-Title is the legacy
+        # name of X-OpenRouter-Title; categories: at most 2 per request, from
+        # openrouter.ai/docs/app-attribution). Override via extra_headers.
+        extra = {
+            "HTTP-Referer": "https://github.com/shihabshahrier/freelm",
+            "X-OpenRouter-Title": "freelm",
+            "X-Title": "freelm",
+            "X-OpenRouter-Categories": "programming-app,general-chat",
+        }
         extra.update(kw.pop("extra_headers", None) or {})
         # Free models churn constantly -> discover live by default, free-only.
         kw.setdefault("discover", not kw.get("models"))  # an explicit models= list wins

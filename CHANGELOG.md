@@ -3,6 +3,26 @@
 All notable changes to `freelm` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.1] - 2026-10-10
+
+Packaging, docs and one header change.
+
+### Added
+- `benchmarks/failover.py` and `benchmarks/failover.mjs`: a reproducible
+  provider-failure simulation (fake providers on localhost, real HTTP, default
+  settings). `--installed` runs it against any installed release, so the
+  0.4.0 vs 0.5.0 numbers in `benchmarks/README.md` can be checked by anyone.
+- README: setup for OpenCode, OpenClaw and Hermes Agent with `freelm serve`.
+
+### Changed
+- OpenRouter requests also send `X-OpenRouter-Title` (the current name of
+  `X-Title`, which is kept) and `X-OpenRouter-Categories:
+  programming-app,general-chat`, so freelm's page on openrouter.ai/apps is
+  categorised. Override any of them with `extra_headers` / `extraHeaders`.
+- PyPI and npm listings: shorter keyword-first summaries, the PyPI homepage
+  points at the canonical product page, SPDX license expression (PEP 639),
+  extra classifiers, and an FAQ in the npm README.
+
 ## [0.5.0] - 2026-10-10
 
 ### Added — failover that doesn't wait
